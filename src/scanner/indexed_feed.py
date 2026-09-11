@@ -1,0 +1,191 @@
+"""
+Scanner de Feeds Indexados de Alta Velocidade (Photon-sol / DexScreener / Helius).
+Consome eventos já estruturados e enriquecidos, eliminando a sobrecarga de parsing de RPC bruto.
+"""
+
+import asyncio
+import json
+try:
+    import aiohttp
+    HAS_AIOHTTP = True
+except ImportError:
+    HAS_AIOHTTP = False
+
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Optional, Set
+
+from src.database.models import TokenMetadata
+from src.utils.logger import setup_logger
+
+logger = setup_logger("vertex.scanner.indexed")
+
+
+class IndexedFeedScanner:
+    """Consome feeds de novos pares e micro-caps já indexados no ecossistema Solana."""
+
+    def __init__(
+        self,
+        detection_queue: asyncio.Queue[TokenMetadata],
+        base_url: str = "https://api.dexscreener.com",
+        poll_interval_seconds: float = 2.0,
+        max_seen_cache: int = 10000,
+    ) -> None:
+        self.detection_queue: asyncio.Queue[TokenMetadata] = detection_queue
+        self.base_url: str = base_url.rstrip("/")
+        self.poll_interval: float = poll_interval_seconds
+        self.max_seen_cache: int = max_seen_cache
+        self._seen_addresses: Set[str] = set()
+        self.is_running: bool = False
+        self._task: Optional[asyncio.Task[None]] = None
+        self._session: Optional[Any] = None
+
+    async def _get_session(self) -> Any:
+        if HAS_AIOHTTP:
+            if self._session is None or getattr(self._session, "closed", True):
+                timeout = aiohttp.ClientTimeout(total=5.0)
+                self._session = aiohttp.ClientSession(timeout=timeout)
+            return self._session
+        return None
+
+    async def start(self) -> None:
+        """Inicia o loop assíncrono de consumo do feed indexado."""
+        self.is_running = True
+        self._task = asyncio.create_task(self._poll_loop())
+        logger.info(
+            "Scanner de Feeds Indexados iniciado (Provedor: %s, Intervalo: %.1fs).",
+            self.base_url,
+            self.poll_interval,
+        )
+
+    async def stop(self) -> None:
+        """Finaliza o scanner controladamente."""
+        self.is_running = False
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        if self._session and not getattr(self._session, "closed", True):
+            await self._session.close()
+            self._session = None
+        logger.info("Scanner de Feeds Indexados finalizado.")
+
+    async def _poll_loop(self) -> None:
+        """Loop contínuo de polling com proteção contra falhas e reconexão."""
+        while self.is_running:
+            try:
+                pairs = await self._fetch_latest_pairs()
+                for pair_data in pairs:
+                    if not self.is_running:
+                        break
+                    token = self.parse_indexed_pair(pair_data)
+                    if token and token.address not in self._seen_addresses:
+                        self._seen_addresses.add(token.address)
+                        if len(self._seen_addresses) > self.max_seen_cache:
+                            self._seen_addresses.pop()
+
+                        logger.info(
+                            "Novo par indexado detectado! Token: %s (%s) | DEX: %s | Liquidez: $%.2f",
+                            token.address,
+                            token.symbol or "N/A",
+                            token.dex,
+                            token.initial_liquidity_usd,
+                            extra={
+                                "event": "INDEXED_TOKEN_DETECTED",
+                                "token_address": token.address,
+                                "symbol": token.symbol,
+                                "dex": token.dex,
+                            },
+                        )
+                        await self.detection_queue.put(token)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug("Falha transitória no polling do feed indexado: %s", exc)
+
+            await asyncio.sleep(self.poll_interval)
+
+    def _sync_http_get(self, url: str) -> list[dict[str, Any]]:
+        """Requisição HTTP GET síncrona com headers adequados (fallback)."""
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Vertex-bot/1.0 (High-Speed Dex Indexer)",
+                "Accept": "application/json",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            data = resp.read()
+            return json.loads(data.decode("utf-8"))  # type: ignore
+
+    async def _fetch_latest_pairs(self) -> list[dict[str, Any]]:
+        """Consulta o endpoint de novos perfis e pools mais recentes."""
+        url = f"{self.base_url}/token-profiles/latest/v1"
+        try:
+            if HAS_AIOHTTP:
+                session = await self._get_session()
+                headers = {
+                    "User-Agent": "Vertex-bot/1.0 (High-Speed Dex Indexer)",
+                    "Accept": "application/json",
+                }
+                async with session.get(url, headers=headers) as resp:
+                    res = await resp.json()
+                    if isinstance(res, list):
+                        return res
+                    return []
+            else:
+                res = await asyncio.to_thread(self._sync_http_get, url)
+                if isinstance(res, list):
+                    return res
+                return []
+        except Exception:
+            return []
+
+    @staticmethod
+    def parse_indexed_pair(data: dict[str, Any]) -> Optional[TokenMetadata]:
+        """Normaliza o payload recebido do feed indexado para TokenMetadata."""
+        try:
+            chain_id = data.get("chainId", "").lower()
+            token_address = data.get("tokenAddress")
+
+            # Filtrar exclusivamente pares da Solana
+            if chain_id != "solana" or not token_address:
+                return None
+
+            # Metadados opcionais enriquecidos
+            symbol = data.get("symbol")
+            name = data.get("name")
+            dex = data.get("dexId", "raydium").lower()
+            pool_address = data.get("poolAddress")
+
+            # Extração defensiva de liquidez inicial em USD
+            liquidity_usd = Decimal("0.0")
+            if "liquidity" in data and isinstance(data["liquidity"], dict):
+                raw_liq = data["liquidity"].get("usd", 0.0)
+                liquidity_usd = Decimal(str(raw_liq or 0.0))
+            elif "initialLiquidityUsd" in data:
+                liquidity_usd = Decimal(str(data["initialLiquidityUsd"]))
+            else:
+                # Se o feed indexado indicar criação recente sem cotação fechada, define baseline
+                liquidity_usd = Decimal("7500.0")
+
+            return TokenMetadata(
+                address=token_address,
+                chain="solana",
+                dex=dex,
+                pool_address=pool_address,
+                initial_liquidity_usd=liquidity_usd,
+                symbol=symbol,
+                name=name,
+                detection_timestamp=datetime.now(timezone.utc),
+                raw_event=data,
+            )
+        except Exception as exc:
+            logger.debug("Erro ao decodificar par indexado: %s", exc)
+            return None
