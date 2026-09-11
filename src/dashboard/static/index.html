@@ -77,24 +77,24 @@
 
     <!-- KPI SUMMARY CARDS -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <!-- Carteira / Patrimônio Total -->
+      <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Patrimônio da Carteira</span>
+        <div class="mt-2 flex items-baseline justify-between">
+          <span id="kpi-equity" class="text-2xl font-bold text-gray-200">$5.00</span>
+          <span id="kpi-equity-badge" class="text-xs px-2 py-0.5 rounded font-semibold bg-brand-900/40 text-brand-400">0.0%</span>
+        </div>
+        <span id="kpi-equity-sub" class="text-[11px] text-gray-500 mt-1">Banca inicial: $5.00</span>
+      </div>
+
       <!-- PnL Realizado -->
       <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
         <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">PnL Total Realizado</span>
         <div class="mt-2 flex items-baseline justify-between">
           <span id="kpi-pnl" class="text-2xl font-bold text-gray-200">$0.00</span>
-          <span id="kpi-pnl-badge" class="text-xs px-2 py-0.5 rounded font-semibold bg-gray-800 text-gray-400">0.0%</span>
-        </div>
-        <span class="text-[11px] text-gray-500 mt-1">Lucro líquido contábil</span>
-      </div>
-
-      <!-- Win Rate -->
-      <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
-        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Taxa de Acerto (Win-Rate)</span>
-        <div class="mt-2 flex items-baseline justify-between">
-          <span id="kpi-winrate" class="text-2xl font-bold text-gray-200">0.0%</span>
           <span id="kpi-trades-count" class="text-xs text-gray-400">0 trades</span>
         </div>
-        <span class="text-[11px] text-gray-500 mt-1">Trades fechados positivos</span>
+        <span class="text-[11px] text-gray-500 mt-1">Lucro líquido contábil</span>
       </div>
 
       <!-- Posições Abertas -->
@@ -156,12 +156,12 @@
             <thead class="bg-dark-900/60 text-gray-400 uppercase tracking-wider border-b border-dark-700">
               <tr>
                 <th class="py-3 px-4">ID</th>
-                <th class="py-3 px-4">Token</th>
+                <th class="py-3 px-4">Token (Nome / Símbolo)</th>
                 <th class="py-3 px-4">Status</th>
                 <th class="py-3 px-4">Entrada ($)</th>
                 <th class="py-3 px-4">Máxima ($)</th>
                 <th class="py-3 px-4">Stop ($)</th>
-                <th class="py-3 px-4">Capital ($)</th>
+                <th class="py-3 px-4">Capital Alocado ($)</th>
                 <th class="py-3 px-4">PnL ($)</th>
                 <th class="py-3 px-4">Break-Even</th>
                 <th class="py-3 px-4">Abertura</th>
@@ -309,14 +309,27 @@
           const scanner = json.data.scanner;
 
           const pnlVal = pnl.total_pnl_usd || 0.0;
+          const initialWallet = pnl.initial_wallet_usd || 5.0;
+          const currentEquity = pnl.current_equity_usd || (initialWallet + pnlVal);
+          const equityGrowthPct = ((currentEquity - initialWallet) / initialWallet * 100.0).toFixed(1);
+
+          const equityEl = document.getElementById('kpi-equity');
+          equityEl.textContent = '$' + currentEquity.toFixed(2);
+          equityEl.className = 'text-2xl font-bold ' + (pnlVal > 0 ? 'text-brand-500' : pnlVal < 0 ? 'text-rose-500' : 'text-gray-200');
+
+          const badgeEl = document.getElementById('kpi-equity-badge');
+          badgeEl.textContent = (equityGrowthPct >= 0 ? '+' : '') + equityGrowthPct + '%';
+          badgeEl.className = 'text-xs px-2 py-0.5 rounded font-semibold ' + (pnlVal >= 0 ? 'bg-brand-900/40 text-brand-400' : 'bg-rose-900/40 text-rose-400');
+
+          document.getElementById('kpi-equity-sub').textContent = 'Inicial: $' + initialWallet.toFixed(2) + ' | Lucro: ' + (pnlVal >= 0 ? '+$' : '-$') + Math.abs(pnlVal).toFixed(2);
+
           const pnlEl = document.getElementById('kpi-pnl');
           pnlEl.textContent = (pnlVal >= 0 ? '+$' : '-$') + Math.abs(pnlVal).toFixed(2);
           pnlEl.className = 'text-2xl font-bold ' + (pnlVal > 0 ? 'text-brand-500' : pnlVal < 0 ? 'text-rose-500' : 'text-gray-200');
 
-          document.getElementById('kpi-winrate').textContent = (pnl.win_rate_pct || 0.0).toFixed(1) + '%';
-          document.getElementById('kpi-trades-count').textContent = (pnl.closed_positions || 0) + ' fechados';
+          document.getElementById('kpi-trades-count').textContent = (pnl.closed_positions || 0) + ' trades fechados';
 
-          document.getElementById('kpi-active-pos').textContent = pnl.active_positions || 0;
+          document.getElementById('kpi-active-pos').textContent = (pnl.active_positions || 0) + ' / 2 slots';
           document.getElementById('kpi-allocated').textContent = '$' + (pnl.total_allocated_usd || 0.0).toFixed(2) + ' alocados';
 
           document.getElementById('kpi-break-evens').textContent = pnl.break_evens || 0;
@@ -360,16 +373,26 @@
 
             const shortAddr = p.token_address.slice(0, 4) + '...' + p.token_address.slice(-4);
             const dateStr = p.opened_at ? new Date(p.opened_at).toLocaleTimeString() : '-';
+            const symbolHtml = p.symbol 
+              ? `<div class="font-bold text-gray-100 flex items-center space-x-1.5"><span class="text-brand-400">${p.symbol}</span>${p.name ? `<span class="text-[10px] text-gray-400 font-normal truncate max-w-[120px]">(${p.name})</span>` : ''}</div>`
+              : `<div class="font-bold text-gray-300">Desconhecido</div>`;
 
             return `
               <tr class="hover:bg-dark-700/40 transition">
                 <td class="py-3 px-4 font-bold text-gray-400">#${p.id}</td>
-                <td class="py-3 px-4 font-mono text-gray-200" title="${p.token_address}">${shortAddr}</td>
+                <td class="py-3 px-4" title="${p.token_address}">
+                  ${symbolHtml}
+                  <div class="text-[10px] font-mono text-gray-500">${shortAddr}</div>
+                </td>
                 <td class="py-3 px-4">${statusBadge}</td>
                 <td class="py-3 px-4">$${parseFloat(p.entry_price).toFixed(6)}</td>
                 <td class="py-3 px-4 text-emerald-400">$${parseFloat(p.highest_price_seen).toFixed(6)}</td>
                 <td class="py-3 px-4 text-amber-400">$${parseFloat(p.trailing_stop_price).toFixed(6)}</td>
-                <td class="py-3 px-4">$${parseFloat(p.allocated_capital_usd).toFixed(2)}</td>
+                <td class="py-3 px-4">
+                  <span class="px-2 py-0.5 rounded bg-blue-950/60 border border-blue-500/30 text-blue-400 font-bold font-mono">
+                    $${parseFloat(p.allocated_capital_usd).toFixed(2)}
+                  </span>
+                </td>
                 <td class="py-3 px-4 font-bold ${pnlColor}">$${parseFloat(pnl).toFixed(2)}</td>
                 <td class="py-3 px-4">${beBadge}</td>
                 <td class="py-3 px-4 text-gray-400">${dateStr}</td>

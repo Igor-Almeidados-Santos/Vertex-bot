@@ -29,7 +29,7 @@ class PaperExecutionEngine(IExecutionEngine):
         self,
         positions_repo: PositionsRepository,
         orders_repo: OrdersRepository,
-        initial_balance_usd: Decimal = Decimal("1500.0"),  # ~10 SOL
+        initial_balance_usd: Decimal = Decimal("5.0"),
         simulated_latency_ms: int = 250,
         trailing_drop_pct: Decimal = Decimal("0.12"),
     ) -> None:
@@ -49,20 +49,29 @@ class PaperExecutionEngine(IExecutionEngine):
         amount_usd: Decimal,
     ) -> PositionState | None:
         """Simula compra a mercado com cálculo de slippage proporcional à liquidez."""
-        if amount_usd > self.balance_usd:
+        if self.balance_usd < Decimal("0.50"):
             logger.warning(
-                "Saldo virtual insuficiente para compra: Saldo=$%.2f, Necessário=$%.2f",
+                "Saldo virtual insuficiente para compra: Saldo=$%.2f (Mínimo: $0.50)",
                 self.balance_usd,
-                amount_usd,
             )
             return None
+
+        # Limita o valor investido ao saldo restante em caixa
+        if amount_usd > self.balance_usd:
+            amount_usd = self.balance_usd
 
         # Simulação de latência de confirmação de rede
         await asyncio.sleep(self.simulated_latency_ms / 1000.0)
 
-        # Preço base hipotético de lançamento (ou derivado da liquidez)
-        # Ex: $0.001 inicial
-        base_price = Decimal("0.001")
+        # Preço base obtido da cotação real do mercado ou fallback defensivo
+        raw_price = token.raw_event.get("priceUsd") if isinstance(token.raw_event, dict) else None
+        if raw_price:
+            try:
+                base_price = Decimal(str(raw_price))
+            except Exception:
+                base_price = Decimal("0.001")
+        else:
+            base_price = Decimal("0.001")
 
         # Modelo de slippage: slippage = (ordem / liquidez_inicial) * 0.5
         liquidity = token.initial_liquidity_usd if token.initial_liquidity_usd > Decimal("0") else Decimal("5000.0")
@@ -105,13 +114,15 @@ class PaperExecutionEngine(IExecutionEngine):
         )
         await self.orders_repo.record_order(order)
 
+        label = f"{token.symbol} ({token.name})" if token.symbol else token.address[:8]
         logger.info(
-            "COMPRA PAPER EXECUTADA! Token: %s | Preço: $%.6f | Qtd: %.2f | Alocado: $%.2f | Saldo Restante: $%.2f",
+            "🟢 [COMPRA PAPER EXECUTADA] Token: %s (%s) | Preço: $%.8f | Qtd: %.2f | Capital Alocado: $%.2f | Posição #%d Aberta",
+            label,
             token.address,
             execution_price,
             tokens_received,
             amount_usd,
-            self.balance_usd,
+            pos_id,
             extra={
                 "event": "PAPER_BUY_FILLED",
                 "token_address": token.address,
@@ -159,10 +170,14 @@ class PaperExecutionEngine(IExecutionEngine):
         )
         await self.orders_repo.record_order(order)
 
+        tag = "💰 [VENDA PARCIAL BREAK-EVEN]" if reason == "BREAK_EVEN" else (
+            "🔴 [VENDA TOTAL TRAILING STOP]" if reason == "TRAILING_STOP" else "🛑 [VENDA STOP LOSS]"
+        )
         logger.info(
-            "VENDA PAPER EXECUTADA (%s)! Token: %s | Qtd: %.2f | Preço: $%.6f | Total: $%.2f | Novo Saldo: $%.2f",
-            reason,
-            position.token_address,
+            "%s! Posição #%d (%s) | Qtd: %.2f | Preço: $%.8f | Total: $%.2f | Saldo: $%.2f",
+            tag,
+            position.id or 0,
+            position.token_address[:8],
             amount_tokens,
             execution_price,
             gross_usd,

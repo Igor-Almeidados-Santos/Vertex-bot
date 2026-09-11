@@ -53,6 +53,12 @@ class PositionTracker:
         action, tokens_to_sell = decision
 
         if action == "BREAK_EVEN":
+            logger.info(
+                "💰 [BREAK-EVEN ATIVADO!] Posição #%d (%s) | Cotação dobrou para $%.8f (+100%%) | Vendendo 50%% dos tokens para recuperar capital inicial!",
+                position_id,
+                position.token_address,
+                current_price,
+            )
             # 1. Executa venda de 50% com preço corrente de execução
             await self.engine.execute_sell(
                 position,
@@ -75,6 +81,22 @@ class PositionTracker:
             )
 
         elif action in ("TRAILING_STOP", "EMERGENCY_STOP"):
+            if action == "TRAILING_STOP":
+                logger.info(
+                    "🔴 [TRAILING STOP ATIVADO!] Posição #%d (%s) | Recuo de 12%% da máxima ($%.8f -> $%.8f) | Fechando posição!",
+                    position_id,
+                    position.token_address,
+                    position.highest_price_seen,
+                    current_price,
+                )
+            else:
+                logger.warning(
+                    "🛑 [STOP LOSS DE EMERGÊNCIA!] Posição #%d (%s) | Queda severa ($%.8f) | Fechando posição para mitigar risco!",
+                    position_id,
+                    position.token_address,
+                    current_price,
+                )
+
             # 1. Executa venda de 100% dos restantes com preço corrente de execução
             await self.engine.execute_sell(
                 position,
@@ -93,4 +115,4 @@ class PositionTracker:
             )
             # 4. Remove das posições ativas
             self.active_positions.pop(position_id, None)
-            logger.info("Posição ID #%d encerrada com sucesso por %s.", position_id, action)
+            logger.info("Posição ID #%d encerrada com sucesso por %s | PnL Realizado: $%.2f.", position_id, action, position.realized_pnl_usd)

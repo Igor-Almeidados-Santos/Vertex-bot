@@ -1,0 +1,141 @@
+"""
+Testes Unitários para DexScreenerPriceFeed e Integração de Saídas no Tracker.
+"""
+
+from decimal import Decimal
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from src.database.connection import DatabaseManager
+from src.database.models import ExecutionMode, PositionState, PositionStatus, TokenMetadata
+from src.database.repository import OrdersRepository, PositionsRepository, TokensRepository
+from src.engine.paper import PaperExecutionEngine
+from src.engine.price_feed import DexScreenerPriceFeed
+from src.engine.risk import RiskManager
+from src.engine.tracker import PositionTracker
+
+
+@pytest.mark.asyncio
+async def test_price_feed_empty_list() -> None:
+    feed = DexScreenerPriceFeed()
+    res = await feed.fetch_prices([])
+    assert res == {}
+    await feed.close()
+
+
+@pytest.mark.asyncio
+async def test_price_feed_parsing() -> None:
+    feed = DexScreenerPriceFeed()
+    mock_payload = {
+        "pairs": [
+            {
+                "baseToken": {"address": "TokenA11111111111111111111111111111111111111"},
+                "priceUsd": "0.002500",
+            },
+            {
+                "baseToken": {"address": "TokenB22222222222222222222222222222222222222"},
+                "priceUsd": "1.4590",
+            },
+        ]
+    }
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value=mock_payload)
+
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_resp
+    mock_cm.__aexit__.return_value = None
+
+    mock_session = AsyncMock()
+    mock_session.closed = False
+    mock_session.get = MagicMock(return_value=mock_cm)
+    feed._session = mock_session
+
+    prices = await feed.fetch_prices([
+        "TokenA11111111111111111111111111111111111111",
+        "TokenB22222222222222222222222222222222222222",
+    ])
+
+    assert prices["TokenA11111111111111111111111111111111111111"] == Decimal("0.002500")
+    assert prices["TokenB22222222222222222222222222222222222222"] == Decimal("1.4590")
+    await feed.close()
+
+
+@pytest.mark.asyncio
+async def test_live_price_tick_triggers_break_even_and_trailing_stop(tmp_path: Any) -> None:
+    """Valida ciclo completo: tick dobra preço (+100%) -> Break Even -> tick recua 15% -> Trailing Stop."""
+    db_path = str(tmp_path / "test_tracker.db")
+    db = DatabaseManager(db_path)
+    await db.initialize()
+
+    tokens_repo = TokensRepository(db)
+    pos_repo = PositionsRepository(db)
+    orders_repo = OrdersRepository(db)
+
+    # Insere token pré-requisito para foreign key
+    token_addr = "TokenWin111111111111111111111111111111111111"
+    await tokens_repo.save_detected_token(
+        TokenMetadata(
+            address=token_addr,
+            symbol="WIN",
+            name="Winner Token",
+            initial_liquidity_usd=Decimal("15000.0"),
+        )
+    )
+
+    engine = PaperExecutionEngine(
+        positions_repo=pos_repo,
+        orders_repo=orders_repo,
+        initial_balance_usd=Decimal("100.0"),
+    )
+    risk_manager = RiskManager(
+        break_even_gain_pct=Decimal("100.0"),
+        trailing_drop_pct=Decimal("0.12"),  # 12%
+        emergency_stop_loss_pct=Decimal("0.20"),
+    )
+    tracker = PositionTracker(
+        engine=engine,
+        positions_repo=pos_repo,
+        risk_manager=risk_manager,
+    )
+
+    # Cria posição de $5.00
+    pos = PositionState(
+        token_address="TokenWin111111111111111111111111111111111111",
+        mode=ExecutionMode.PAPER,
+        entry_price=Decimal("0.001"),
+        initial_token_amount=Decimal("5000.0"),
+        allocated_capital_usd=Decimal("5.0"),
+        trailing_drop_pct=Decimal("0.12"),
+        status=PositionStatus.OPEN,
+    )
+    pos_id = await pos_repo.create_position(pos)
+    pos.id = pos_id
+    await tracker.register_position(pos)
+
+    # 1. Preço sobe para 2x ($0.00205) -> Break-Even!
+    await tracker.process_price_tick(pos_id, Decimal("0.00205"))
+    assert pos.break_even_triggered is True
+    assert pos.status == PositionStatus.PARTIALLY_CLOSED
+    assert pos.remaining_token_amount == Decimal("2500.0")
+
+    # 2. Preço sobe para máxima ($0.0030)
+    await tracker.process_price_tick(pos_id, Decimal("0.0030"))
+    assert pos.highest_price_seen == Decimal("0.0030")
+
+    # 3. Preço recua 15% da máxima ($0.00255) -> Trailing Stop!
+    await tracker.process_price_tick(pos_id, Decimal("0.00255"))
+    assert pos.status == PositionStatus.CLOSED
+    assert pos_id not in tracker.active_positions
+
+    # Verifica ordens executadas no banco
+    orders = await orders_repo.get_orders_by_position(pos_id)
+    assert len(orders) == 2
+    assert orders[0]["order_type"] == "TAKE_PROFIT_PARTIAL"
+    assert orders[1]["order_type"] == "TRAILING_STOP_EXIT"
+
+    await db.close()
+

@@ -39,9 +39,14 @@ class Settings(BaseSettings):
     SQLITE_DB_PATH: str = "data/vertex_bot.db"
 
     # === PAPER TRADING DEFAULTS ===
+    PAPER_INITIAL_WALLET_USD: Decimal = Decimal("5.0")
+    MAX_CONCURRENT_POSITIONS: int = 2
+    MIN_TRADE_AMOUNT_USD: Decimal = Decimal("1.0")
     PAPER_INITIAL_BALANCE_SOL: Decimal = Decimal("10.0")
     PAPER_SIMULATED_LATENCY_MS: int = 250
     PAPER_DEFAULT_BUY_AMOUNT_SOL: Decimal = Decimal("0.1")
+    PAPER_BUY_AMOUNT_USD: Decimal = Decimal("2.5")
+    PRICE_POLL_INTERVAL_SEC: float = 3.0
 
     # === PARÂMETROS DE RISCO E MITIGAÇÃO ===
     MAX_SLIPPAGE_PCT: Decimal = Decimal("1.5")
@@ -76,6 +81,23 @@ def load_env_file(filepath: str = ".env") -> dict[str, str]:
     return values
 
 
+def _apply_env_var(settings: Settings, k: str, v: str) -> None:
+    """Aplica uma única variável convertendo para o tipo de destino."""
+    if not hasattr(settings, k):
+        return
+    current_val = getattr(settings, k)
+    if isinstance(current_val, bool):
+        setattr(settings, k, v.lower() in ("true", "1", "yes"))
+    elif isinstance(current_val, int):
+        setattr(settings, k, int(v))
+    elif isinstance(current_val, float):
+        setattr(settings, k, float(v))
+    elif isinstance(current_val, Decimal):
+        setattr(settings, k, Decimal(v))
+    else:
+        setattr(settings, k, v)
+
+
 def get_settings(env_path: str = ".env") -> Settings:
     """Retorna uma instância validada das configurações."""
     env_vars = load_env_file(env_path)
@@ -83,16 +105,7 @@ def get_settings(env_path: str = ".env") -> Settings:
 
     # Aplica variáveis encontradas no .env
     for k, v in env_vars.items():
-        if hasattr(settings, k):
-            current_val = getattr(settings, k)
-            if isinstance(current_val, bool):
-                setattr(settings, k, v.lower() in ("true", "1", "yes"))
-            elif isinstance(current_val, int):
-                setattr(settings, k, int(v))
-            elif isinstance(current_val, Decimal):
-                setattr(settings, k, Decimal(v))
-            else:
-                setattr(settings, k, v)
+        _apply_env_var(settings, k, v)
 
     # Se HELIUS_API_KEY foi definida e os endpoints ainda apontam para o RPC público default,
     # monta automaticamente as URLs de alta velocidade da Helius:

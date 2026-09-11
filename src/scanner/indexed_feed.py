@@ -223,9 +223,9 @@ class IndexedFeedScanner:
             raw_event=pair_info,
         )
 
-    async def _fetch_latest_pairs(self) -> list[dict[str, Any]]:
-        """Consulta o endpoint de novos perfis e pools mais recentes."""
-        url = f"{self.base_url}/token-profiles/latest/v1"
+    async def _fetch_single_endpoint(self, path: str) -> list[dict[str, Any]]:
+        """Consulta um endpoint específico do provedor indexado."""
+        url = f"{self.base_url}{path}"
         try:
             if HAS_AIOHTTP:
                 session = await self._get_session()
@@ -234,17 +234,34 @@ class IndexedFeedScanner:
                     "Accept": "application/json",
                 }
                 async with session.get(url, headers=headers) as resp:
-                    res = await resp.json()
-                    if isinstance(res, list):
-                        return cast(list[dict[str, Any]], res)
+                    if resp.status == 200:
+                        res = await resp.json()
+                        if isinstance(res, list):
+                            return cast(list[dict[str, Any]], res)
                     return []
             else:
                 res = await asyncio.to_thread(self._sync_http_get, url)
                 if isinstance(res, list):
                     return res
                 return []
-        except Exception:
+        except Exception as exc:
+            logger.debug("Falha transitória na leitura do feed %s: %s", path, exc)
             return []
+
+    async def _fetch_latest_pairs(self) -> list[dict[str, Any]]:
+        """Consulta múltiplos endpoints em busca de novos perfis e boosts recentes."""
+        endpoints = [
+            "/token-profiles/latest/v1",
+            "/token-boosts/latest/v1",
+            "/token-boosts/top/v1",
+        ]
+        tasks = [self._fetch_single_endpoint(ep) for ep in endpoints]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        merged: list[dict[str, Any]] = []
+        for res in results:
+            if isinstance(res, list):
+                merged.extend(res)
+        return merged
 
     @staticmethod
     def parse_indexed_pair(data: dict[str, Any]) -> TokenMetadata | None:

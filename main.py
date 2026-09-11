@@ -15,6 +15,7 @@ from src.database.connection import DatabaseManager
 from src.database.models import TokenMetadata
 from src.database.repository import OrdersRepository, PositionsRepository, TokensRepository
 from src.engine.paper import PaperExecutionEngine
+from src.engine.price_feed import DexScreenerPriceFeed
 from src.engine.risk import RiskManager
 from src.engine.tracker import PositionTracker
 from src.scanner.client import ResilientRPCClient
@@ -36,6 +37,11 @@ class VertexBotOrchestrator:
         self.positions_repo: PositionsRepository = PositionsRepository(self.db)
         self.orders_repo: OrdersRepository = OrdersRepository(self.db)
 
+        # Provedor de Cotações Contínuas
+        self.price_feed: DexScreenerPriceFeed = DexScreenerPriceFeed(
+            base_url=settings.DEXSCREENER_API_BASE_URL,
+        )
+
         # Cliente RPC Resiliente
         self.rpc_client: ResilientRPCClient = ResilientRPCClient(
             primary_url=settings.PRIMARY_RPC_HTTP_URL,
@@ -55,7 +61,7 @@ class VertexBotOrchestrator:
         self.execution_engine: PaperExecutionEngine = PaperExecutionEngine(
             positions_repo=self.positions_repo,
             orders_repo=self.orders_repo,
-            initial_balance_usd=settings.PAPER_INITIAL_BALANCE_SOL * Decimal("150.0"),  # Conversão de SOL para USD base
+            initial_balance_usd=settings.PAPER_INITIAL_WALLET_USD,
             simulated_latency_ms=settings.PAPER_SIMULATED_LATENCY_MS,
             trailing_drop_pct=settings.TRAILING_STOP_DROP_PCT / Decimal("100.0"),
         )
@@ -110,18 +116,22 @@ class VertexBotOrchestrator:
         # Tarefa 1: Processador da fila de auditoria de segurança
         self._tasks.append(asyncio.create_task(self._security_worker()))
 
-        # Tarefa 2: Loop de telemetria periódica
+        # Tarefa 2: Monitor contínuo de cotações e saídas (Break-Even / Trailing Stop)
+        self._tasks.append(asyncio.create_task(self._price_monitor_worker()))
+
+        # Tarefa 3: Loop de telemetria periódica
         self._tasks.append(asyncio.create_task(self._telemetry_worker()))
 
-        # Tarefa 3: Ingestão de Tokens (Real ou Mock para testes locais)
+        # Tarefa 4: Ingestão de Tokens (Real ou Mock para testes locais)
         if run_mock_stream:
             self._tasks.append(asyncio.create_task(self._mock_stream_producer()))
         else:
             await self.scanner.start()
 
     async def _security_worker(self) -> None:
-        """Consome tokens da fila de detecção e executa a triagem de segurança."""
-        buy_amount_usd = self.settings.PAPER_DEFAULT_BUY_AMOUNT_SOL * Decimal("150.0")
+        """Consome tokens da fila de detecção e executa a triagem de segurança com gestão dinâmica de banca."""
+        max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 2))
+        min_trade = Decimal(str(getattr(self.settings, "MIN_TRADE_AMOUNT_USD", "1.0")))
 
         # Em modo de teste simulado, usa mock de autoridades para focar no ciclo de vida de trades
         mock_overrides = (
@@ -147,6 +157,50 @@ class VertexBotOrchestrator:
 
                 if audit.is_approved:
                     self.telemetry.record_approval()
+
+                    # 1. Verifica slots disponíveis
+                    active_count = len(self.position_tracker.active_positions)
+                    if active_count >= max_positions:
+                        logger.info(
+                            "⏸️ [SLOTS ESGOTADOS] Posições ativas: %d/%d. Aguardando saída para liberar capital para %s.",
+                            active_count,
+                            max_positions,
+                            token.symbol or token.address[:8],
+                        )
+                        self.detection_queue.task_done()
+                        continue
+
+                    # 2. Verifica saldo disponível em caixa
+                    available_cash = self.execution_engine.balance_usd
+                    if available_cash < min_trade:
+                        logger.info(
+                            "⏸️ [SALDO INSUFICIENTE] Saldo em caixa ($%.2f) abaixo do mínimo ($%.2f). Aguardando liquidações para %s.",
+                            available_cash,
+                            min_trade,
+                            token.symbol or token.address[:8],
+                        )
+                        self.detection_queue.task_done()
+                        continue
+
+                    # 3. Calcula patrimônio total dinâmico e divide entre as posições
+                    active_invested = sum(
+                        (p.allocated_capital_usd for p in self.position_tracker.active_positions.values()),
+                        Decimal("0.0"),
+                    )
+                    total_portfolio = available_cash + active_invested
+                    target_per_slot = total_portfolio / Decimal(max_positions)
+                    buy_amount_usd = min(available_cash, target_per_slot)
+
+                    logger.info(
+                        "📊 [GESTÃO DE CARTEIRA] Patrimônio: $%.2f | Caixa: $%.2f | Alocando $%.2f na Posição #%d/%d (%s)",
+                        total_portfolio,
+                        available_cash,
+                        buy_amount_usd,
+                        active_count + 1,
+                        max_positions,
+                        token.symbol or token.address[:8],
+                    )
+
                     # Dispara compra via Execution Engine
                     position = await self.execution_engine.execute_buy(
                         token,
@@ -214,6 +268,32 @@ class VertexBotOrchestrator:
                 await self.position_tracker.process_price_tick(pos_id, drop_price)
                 self.telemetry.record_trade_closed(pos.realized_pnl_usd, reason="TRAILING_STOP")
 
+    async def _price_monitor_worker(self) -> None:
+        """Monitora as cotações em tempo real das posições abertas para disparar saídas automatizadas."""
+        logger.info("Monitor de Cotações Contínuas em Tempo Real (Price Poller) iniciado.")
+        poll_interval = float(getattr(self.settings, "PRICE_POLL_INTERVAL_SEC", 3.0))
+
+        while self.is_running:
+            try:
+                active_pos = list(self.position_tracker.active_positions.items())
+                if active_pos:
+                    addresses = list({pos.token_address for _, pos in active_pos})
+                    prices = await self.price_feed.fetch_prices(addresses)
+
+                    for pos_id, pos in active_pos:
+                        if not self.is_running:
+                            break
+                        current_price = prices.get(pos.token_address)
+                        if current_price is not None and current_price > Decimal("0"):
+                            await self.position_tracker.process_price_tick(pos_id, current_price)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug("Falha transitória na checagem de cotações: %s", exc)
+
+            await asyncio.sleep(poll_interval)
+
     async def _telemetry_worker(self) -> None:
         """Imprime relatório de telemetria periodicamente."""
         while self.is_running:
@@ -239,6 +319,7 @@ class VertexBotOrchestrator:
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
         # Fecha conexões de rede e banco de dados
+        await self.price_feed.close()
         await self.rpc_client.close()
         await self.db.close()
 

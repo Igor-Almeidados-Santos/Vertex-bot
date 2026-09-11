@@ -276,14 +276,16 @@ class PositionsRepository:
         return positions
 
     async def get_all_positions(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Retorna todas as posições registradas ordenadas pelas mais recentes."""
+        """Retorna todas as posições registradas com metadados do token (symbol e name)."""
         query = """
-        SELECT id, token_address, status, mode, entry_price, initial_token_amount,
-               remaining_token_amount, allocated_capital_usd, realized_pnl_usd,
-               highest_price_seen, break_even_triggered, trailing_stop_price,
-               opened_at, closed_at
-        FROM posicoes
-        ORDER BY id DESC
+        SELECT p.id, p.token_address, p.status, p.mode, p.entry_price, p.initial_token_amount,
+               p.remaining_token_amount, p.allocated_capital_usd, p.realized_pnl_usd,
+               p.highest_price_seen, p.break_even_triggered, p.trailing_stop_price,
+               p.opened_at, p.closed_at,
+               t.symbol, t.name
+        FROM posicoes p
+        LEFT JOIN tokens_catalogados t ON p.token_address = t.address
+        ORDER BY p.id DESC
         LIMIT ?
         """
         rows = await self.db.fetchall(query, (limit,))
@@ -324,6 +326,9 @@ class PositionsRepository:
         total_allocated = float(row[6] or 0.0)
         win_rate = round((win_pos / closed_pos * 100.0), 1) if closed_pos > 0 else 0.0
 
+        initial_wallet = 5.0
+        current_equity = initial_wallet + total_pnl
+
         return {
             "total_positions": total_pos,
             "active_positions": active_pos,
@@ -333,6 +338,8 @@ class PositionsRepository:
             "break_evens": break_evens,
             "total_pnl_usd": round(total_pnl, 2),
             "total_allocated_usd": round(total_allocated, 2),
+            "initial_wallet_usd": round(initial_wallet, 2),
+            "current_equity_usd": round(current_equity, 2),
         }
 
 
@@ -380,4 +387,16 @@ class OrdersRepository:
         LIMIT ?
         """
         rows = await self.db.fetchall(query, (limit,))
+        return [dict(r) for r in rows]
+
+    async def get_orders_by_position(self, position_id: int) -> list[dict[str, Any]]:
+        """Retorna todas as ordens vinculadas a uma posição específica."""
+        query = """
+        SELECT id, position_id, order_type, mode, price, amount, total_usd,
+               tx_hash, fee_cost_usd, slippage_realized, notes, executed_at
+        FROM ordens_executadas
+        WHERE position_id = ?
+        ORDER BY id ASC
+        """
+        rows = await self.db.fetchall(query, (position_id,))
         return [dict(r) for r in rows]
