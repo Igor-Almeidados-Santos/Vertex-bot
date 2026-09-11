@@ -5,6 +5,7 @@ Consome eventos já estruturados e enriquecidos, eliminando a sobrecarga de pars
 
 import asyncio
 import json
+
 try:
     import aiohttp
     HAS_AIOHTTP = True
@@ -13,9 +14,9 @@ except ImportError:
 
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Optional, Set
+from typing import Any, cast
 
 from src.database.models import TokenMetadata
 from src.utils.logger import setup_logger
@@ -37,10 +38,10 @@ class IndexedFeedScanner:
         self.base_url: str = base_url.rstrip("/")
         self.poll_interval: float = poll_interval_seconds
         self.max_seen_cache: int = max_seen_cache
-        self._seen_addresses: Set[str] = set()
+        self._seen_addresses: set[str] = set()
         self.is_running: bool = False
-        self._task: Optional[asyncio.Task[None]] = None
-        self._session: Optional[Any] = None
+        self._task: asyncio.Task[None] | None = None
+        self._session: Any | None = None
 
     async def _get_session(self) -> Any:
         if HAS_AIOHTTP:
@@ -88,17 +89,22 @@ class IndexedFeedScanner:
                         if len(self._seen_addresses) > self.max_seen_cache:
                             self._seen_addresses.pop()
 
+                        # Enriquece com dados detalhados da pool e DEX real
+                        token = await self.enrich_token_pair(token)
+
                         logger.info(
-                            "Novo par indexado detectado! Token: %s (%s) | DEX: %s | Liquidez: $%.2f",
+                            "Novo par indexado detectado! Token: %s (%s) | DEX: %s | Pool: %s | Liquidez: $%.2f",
                             token.address,
                             token.symbol or "N/A",
                             token.dex,
+                            token.pool_address or "N/A (Bonding Curve)",
                             token.initial_liquidity_usd,
                             extra={
                                 "event": "INDEXED_TOKEN_DETECTED",
                                 "token_address": token.address,
                                 "symbol": token.symbol,
                                 "dex": token.dex,
+                                "pool_address": token.pool_address,
                             },
                         )
                         await self.detection_queue.put(token)
@@ -122,7 +128,100 @@ class IndexedFeedScanner:
         )
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             data = resp.read()
-            return json.loads(data.decode("utf-8"))  # type: ignore
+            res = json.loads(data.decode("utf-8"))
+            if isinstance(res, list):
+                return cast(list[dict[str, Any]], res)
+            return []
+
+    def _sync_http_get_dict(self, url: str) -> dict[str, Any]:
+        """Requisição HTTP GET síncrona retornando dicionário JSON (fallback)."""
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Vertex-bot/1.0 (High-Speed Dex Indexer)",
+                "Accept": "application/json",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            data = resp.read()
+            res = json.loads(data.decode("utf-8"))
+            if isinstance(res, dict):
+                return cast(dict[str, Any], res)
+            return {}
+
+    async def _query_pair_api(self, token_address: str) -> dict[str, Any] | None:
+        """Consulta o endpoint de pares para um endereço específico."""
+        url = f"{self.base_url}/latest/dex/tokens/{token_address}"
+        try:
+            if HAS_AIOHTTP:
+                session = await self._get_session()
+                headers = {
+                    "User-Agent": "Vertex-bot/1.0 (High-Speed Dex Indexer)",
+                    "Accept": "application/json",
+                }
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        return None
+                    payload = await resp.json()
+            else:
+                payload = await asyncio.to_thread(self._sync_http_get_dict, url)
+
+            if isinstance(payload, dict):
+                pairs = payload.get("pairs", [])
+                if pairs and isinstance(pairs, list):
+                    return cast(dict[str, Any], pairs[0])
+        except Exception as exc:
+            logger.debug("Falha na requisição de par para %s: %s", token_address, exc)
+        return None
+
+    async def enrich_token_pair(self, token: TokenMetadata) -> TokenMetadata:
+        """
+        Enriquece os metadados do token consultando o endpoint de pares do DexScreener.
+        Obtém poolAddress real, dexId correto (raydium/pumpfun), liquidez USD e cotação.
+        """
+        is_pump = token.address.lower().endswith("pump")
+        pair_info = await self._query_pair_api(token.address)
+
+        if not pair_info:
+            if is_pump and token.dex != "pumpfun":
+                return TokenMetadata(
+                    address=token.address,
+                    chain=token.chain,
+                    dex="pumpfun",
+                    pool_address=token.pool_address,
+                    initial_liquidity_usd=token.initial_liquidity_usd,
+                    symbol=token.symbol,
+                    name=token.name,
+                    detection_timestamp=token.detection_timestamp,
+                    raw_event=token.raw_event,
+                )
+            return token
+
+        dex_from_api = str(pair_info.get("dexId", "pumpfun" if is_pump else token.dex)).lower()
+        if is_pump and dex_from_api != "raydium":
+            dex_from_api = "pumpfun"
+
+        pool_address = pair_info.get("pairAddress") or token.pool_address
+        liq_dict = pair_info.get("liquidity", {})
+        liq_usd = token.initial_liquidity_usd
+        if isinstance(liq_dict, dict) and "usd" in liq_dict:
+            liq_usd = Decimal(str(liq_dict.get("usd") or 0.0))
+
+        symbol = pair_info.get("baseToken", {}).get("symbol") or token.symbol
+        name = pair_info.get("baseToken", {}).get("name") or token.name
+
+        return TokenMetadata(
+            address=token.address,
+            chain="solana",
+            dex=dex_from_api,
+            pool_address=pool_address,
+            initial_liquidity_usd=liq_usd,
+            symbol=symbol,
+            name=name,
+            detection_timestamp=token.detection_timestamp,
+            raw_event=pair_info,
+        )
 
     async def _fetch_latest_pairs(self) -> list[dict[str, Any]]:
         """Consulta o endpoint de novos perfis e pools mais recentes."""
@@ -137,7 +236,7 @@ class IndexedFeedScanner:
                 async with session.get(url, headers=headers) as resp:
                     res = await resp.json()
                     if isinstance(res, list):
-                        return res
+                        return cast(list[dict[str, Any]], res)
                     return []
             else:
                 res = await asyncio.to_thread(self._sync_http_get, url)
@@ -148,7 +247,7 @@ class IndexedFeedScanner:
             return []
 
     @staticmethod
-    def parse_indexed_pair(data: dict[str, Any]) -> Optional[TokenMetadata]:
+    def parse_indexed_pair(data: dict[str, Any]) -> TokenMetadata | None:
         """Normaliza o payload recebido do feed indexado para TokenMetadata."""
         try:
             chain_id = data.get("chainId", "").lower()
@@ -183,7 +282,7 @@ class IndexedFeedScanner:
                 initial_liquidity_usd=liquidity_usd,
                 symbol=symbol,
                 name=name,
-                detection_timestamp=datetime.now(timezone.utc),
+                detection_timestamp=datetime.now(UTC),
                 raw_event=data,
             )
         except Exception as exc:

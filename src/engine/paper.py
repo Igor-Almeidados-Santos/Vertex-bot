@@ -4,9 +4,8 @@ Executa ordens virtuais contra cotações e liquidez reais sem exposição de ca
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from src.database.models import (
     ExecutionMode,
@@ -48,7 +47,7 @@ class PaperExecutionEngine(IExecutionEngine):
         self,
         token: TokenMetadata,
         amount_usd: Decimal,
-    ) -> Optional[PositionState]:
+    ) -> PositionState | None:
         """Simula compra a mercado com cálculo de slippage proporcional à liquidez."""
         if amount_usd > self.balance_usd:
             logger.warning(
@@ -127,7 +126,7 @@ class PaperExecutionEngine(IExecutionEngine):
         amount_tokens: Decimal,
         reason: str,
         execution_price: Decimal,
-    ) -> Optional[OrderExecution]:
+    ) -> OrderExecution | None:
         """Simula venda a mercado e atualiza saldo virtual e banco de dados."""
         if position.id is None:
             raise ValueError("Posição sem ID registrado.")

@@ -6,7 +6,7 @@ Garante execução assíncrona com PRAGMAs de alta concorrência (WAL mode).
 import asyncio
 import os
 import sqlite3
-from typing import Any, List, Optional, Tuple
+from typing import Any, cast
 
 from src.utils.exceptions import DatabaseError
 from src.utils.logger import setup_logger
@@ -96,8 +96,8 @@ class DatabaseManager:
     def __init__(self, db_path: str = "data/vertex_bot.db") -> None:
         self.db_path: str = db_path
         self._initialized: bool = False
-        self._aiosqlite_conn: Optional[Any] = None
-        self._sync_conn: Optional[sqlite3.Connection] = None
+        self._aiosqlite_conn: Any | None = None
+        self._sync_conn: sqlite3.Connection | None = None
         self._lock: asyncio.Lock = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -133,7 +133,7 @@ class DatabaseManager:
             except Exception as exc:
                 raise DatabaseError(f"Falha na inicialização do SQLite em {self.db_path}: {exc}") from exc
 
-    async def execute(self, query: str, params: Tuple[Any, ...] = ()) -> int:
+    async def execute(self, query: str, params: tuple[Any, ...] = ()) -> int:
         """Executa instrução de escrita assincronamente e retorna o ID inserido ou contagem."""
         if not self._initialized:
             await self.initialize()
@@ -160,7 +160,7 @@ class DatabaseManager:
             except Exception as exc:
                 raise DatabaseError(f"Erro ao executar query '{query[:60]}...': {exc}") from exc
 
-    async def fetchall(self, query: str, params: Tuple[Any, ...] = ()) -> List[Tuple[Any, ...]]:
+    async def fetchall(self, query: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
         """Executa consulta assincronamente retornando lista de registros."""
         if not self._initialized:
             await self.initialize()
@@ -169,9 +169,10 @@ class DatabaseManager:
             try:
                 if HAS_AIOSQLITE and self._aiosqlite_conn:
                     cursor = await self._aiosqlite_conn.execute(query, params)
-                    return await cursor.fetchall()
+                    rows = await cursor.fetchall()
+                    return cast(list[tuple[Any, ...]], rows)
                 elif self._sync_conn:
-                    def _fetch() -> List[Tuple[Any, ...]]:
+                    def _fetch() -> list[tuple[Any, ...]]:
                         assert self._sync_conn is not None
                         cursor = self._sync_conn.cursor()
                         cursor.execute(query, params)
@@ -183,7 +184,7 @@ class DatabaseManager:
             except Exception as exc:
                 raise DatabaseError(f"Erro ao buscar registros: {exc}") from exc
 
-    async def fetchone(self, query: str, params: Tuple[Any, ...] = ()) -> Optional[Tuple[Any, ...]]:
+    async def fetchone(self, query: str, params: tuple[Any, ...] = ()) -> tuple[Any, ...] | None:
         """Executa consulta assincronamente retornando um único registro."""
         if not self._initialized:
             await self.initialize()
@@ -192,13 +193,15 @@ class DatabaseManager:
             try:
                 if HAS_AIOSQLITE and self._aiosqlite_conn:
                     cursor = await self._aiosqlite_conn.execute(query, params)
-                    return await cursor.fetchone()
+                    row = await cursor.fetchone()
+                    return cast(tuple[Any, ...] | None, row)
                 elif self._sync_conn:
-                    def _fetch() -> Optional[Tuple[Any, ...]]:
+                    def _fetch() -> tuple[Any, ...] | None:
                         assert self._sync_conn is not None
                         cursor = self._sync_conn.cursor()
                         cursor.execute(query, params)
-                        return cursor.fetchone()
+                        row = cursor.fetchone()
+                        return cast(tuple[Any, ...] | None, row)
 
                     return await asyncio.to_thread(_fetch)
                 else:

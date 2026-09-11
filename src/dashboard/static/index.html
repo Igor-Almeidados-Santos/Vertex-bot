@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vertex-bot — Quantitative Trading & Security Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              500: '#10b981',
+              600: '#059669',
+              900: '#064e3b',
+            },
+            dark: {
+              900: '#0b0f17',
+              800: '#111827',
+              700: '#1f2937',
+              600: '#374151',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #0b0f17; color: #f3f4f6; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #111827; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    .glow-green { box-shadow: 0 0 15px rgba(16, 185, 129, 0.2); }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col antialiased selection:bg-brand-500 selection:text-black">
+
+  <!-- TOP HEADER -->
+  <header class="border-b border-dark-700 bg-dark-800/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-4">
+        <div class="flex items-center space-x-2">
+          <span class="h-3 w-3 rounded-full bg-brand-500 animate-pulse"></span>
+          <span class="font-bold text-lg tracking-wider text-white">VERTEX<span class="text-brand-500">.BOT</span></span>
+        </div>
+        <span class="px-2.5 py-0.5 rounded text-xs font-semibold bg-brand-900/60 text-brand-500 border border-brand-500/30">
+          PAPER TRADING
+        </span>
+        <span class="hidden md:inline-block px-2.5 py-0.5 rounded text-xs font-medium bg-dark-700 text-gray-300">
+          SQLite WAL Mode
+        </span>
+      </div>
+
+      <div class="flex items-center space-x-4">
+        <!-- REFRESH CONTROLS -->
+        <div class="flex items-center bg-dark-900 rounded-lg p-1 border border-dark-700 text-xs">
+          <span class="text-gray-400 px-2">Atualização:</span>
+          <button onclick="setRefreshInterval(2000)" id="btn-ref-2" class="px-2 py-1 rounded bg-brand-600 text-white font-medium">2s</button>
+          <button onclick="setRefreshInterval(5000)" id="btn-ref-5" class="px-2 py-1 rounded text-gray-400 hover:text-white">5s</button>
+          <button onclick="setRefreshInterval(0)" id="btn-ref-0" class="px-2 py-1 rounded text-gray-400 hover:text-white">Pause</button>
+        </div>
+
+        <button onclick="refreshAll()" class="p-2 rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-200 transition" title="Atualizar Agora">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTAINER -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- KPI SUMMARY CARDS -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <!-- PnL Realizado -->
+      <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">PnL Total Realizado</span>
+        <div class="mt-2 flex items-baseline justify-between">
+          <span id="kpi-pnl" class="text-2xl font-bold text-gray-200">$0.00</span>
+          <span id="kpi-pnl-badge" class="text-xs px-2 py-0.5 rounded font-semibold bg-gray-800 text-gray-400">0.0%</span>
+        </div>
+        <span class="text-[11px] text-gray-500 mt-1">Lucro líquido contábil</span>
+      </div>
+
+      <!-- Win Rate -->
+      <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Taxa de Acerto (Win-Rate)</span>
+        <div class="mt-2 flex items-baseline justify-between">
+          <span id="kpi-winrate" class="text-2xl font-bold text-gray-200">0.0%</span>
+          <span id="kpi-trades-count" class="text-xs text-gray-400">0 trades</span>
+        </div>
+        <span class="text-[11px] text-gray-500 mt-1">Trades fechados positivos</span>
+      </div>
+
+      <!-- Posições Abertas -->
+      <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Posições Abertas</span>
+        <div class="mt-2 flex items-baseline justify-between">
+          <span id="kpi-active-pos" class="text-2xl font-bold text-gray-200">0</span>
+          <span id="kpi-allocated" class="text-xs px-2 py-0.5 rounded font-semibold bg-dark-700 text-gray-300">$0.00 alocados</span>
+        </div>
+        <span class="text-[11px] text-gray-500 mt-1">Sob gestão de risco ativa</span>
+      </div>
+
+      <!-- Break-Evens -->
+      <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Break-Evens (+100%)</span>
+        <div class="mt-2 flex items-baseline justify-between">
+          <span id="kpi-break-evens" class="text-2xl font-bold text-brand-500">0</span>
+          <span class="text-xs px-2 py-0.5 rounded font-semibold bg-brand-900/40 text-brand-400">50% Venda</span>
+        </div>
+        <span class="text-[11px] text-gray-500 mt-1">Capital inicial 100% resgatado</span>
+      </div>
+
+      <!-- Scanner Triagem -->
+      <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Tokens Auditados</span>
+        <div class="mt-2 flex items-baseline justify-between">
+          <span id="kpi-tokens-total" class="text-2xl font-bold text-gray-200">0</span>
+          <span id="kpi-tokens-appr" class="text-xs text-gray-400">0 aprovados</span>
+        </div>
+        <span id="kpi-tokens-rej" class="text-[11px] text-rose-400 mt-1">0 rejeitados por Hard Gates</span>
+      </div>
+    </div>
+
+    <!-- TABS NAVIGATION -->
+    <div class="border-b border-dark-700 flex space-x-8 text-sm font-medium">
+      <button onclick="switchTab('positions')" id="tab-btn-positions" class="tab-btn pb-3 border-b-2 border-brand-500 text-brand-500 font-semibold">
+        Posições & Trades
+      </button>
+      <button onclick="switchTab('tokens')" id="tab-btn-tokens" class="tab-btn pb-3 border-b-2 border-transparent text-gray-400 hover:text-gray-200">
+        Tokens Auditados (Hard Gates)
+      </button>
+      <button onclick="switchTab('orders')" id="tab-btn-orders" class="tab-btn pb-3 border-b-2 border-transparent text-gray-400 hover:text-gray-200">
+        Histórico de Ordens
+      </button>
+      <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="tab-btn pb-3 border-b-2 border-transparent text-gray-400 hover:text-gray-200">
+        Motivos de Rejeição
+      </button>
+    </div>
+
+    <!-- TAB 1: POSIÇÕES -->
+    <div id="tab-positions" class="tab-content space-y-4">
+      <div class="bg-dark-800 border border-dark-700 rounded-xl overflow-hidden shadow-sm">
+        <div class="px-6 py-4 border-b border-dark-700 flex justify-between items-center">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300">Posições Financeiras Registradas</h2>
+          <span id="positions-count-badge" class="text-xs bg-dark-700 text-gray-300 px-2 py-0.5 rounded font-mono">0 posições</span>
+        </div>
+        <div class="overflow-x-auto custom-scrollbar">
+          <table class="w-full text-left text-xs font-mono">
+            <thead class="bg-dark-900/60 text-gray-400 uppercase tracking-wider border-b border-dark-700">
+              <tr>
+                <th class="py-3 px-4">ID</th>
+                <th class="py-3 px-4">Token</th>
+                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4">Entrada ($)</th>
+                <th class="py-3 px-4">Máxima ($)</th>
+                <th class="py-3 px-4">Stop ($)</th>
+                <th class="py-3 px-4">Capital ($)</th>
+                <th class="py-3 px-4">PnL ($)</th>
+                <th class="py-3 px-4">Break-Even</th>
+                <th class="py-3 px-4">Abertura</th>
+              </tr>
+            </thead>
+            <tbody id="positions-table-body" class="divide-y divide-dark-700 text-gray-300">
+              <tr>
+                <td colspan="10" class="py-8 text-center text-gray-500">Nenhuma posição registrada ainda.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: TOKENS AUDITADOS -->
+    <div id="tab-tokens" class="tab-content hidden space-y-4">
+      <!-- Filtros -->
+      <div class="flex flex-col sm:flex-row gap-3 justify-between items-center bg-dark-800 p-4 border border-dark-700 rounded-xl">
+        <div class="flex items-center space-x-2 w-full sm:w-auto">
+          <input type="text" id="token-search-input" oninput="debounceFilterTokens()" placeholder="Buscar por endereço, símbolo ou nome..." 
+                 class="w-full sm:w-80 bg-dark-900 border border-dark-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-brand-500">
+        </div>
+        <div class="flex items-center space-x-2 text-xs">
+          <button onclick="filterTokensByStatus('ALL')" id="filter-all" class="px-3 py-1.5 rounded bg-brand-600 text-white font-medium">Todos</button>
+          <button onclick="filterTokensByStatus('APPROVED')" id="filter-approved" class="px-3 py-1.5 rounded bg-dark-700 text-gray-300 hover:text-white">Aprovados</button>
+          <button onclick="filterTokensByStatus('REJECTED')" id="filter-rejected" class="px-3 py-1.5 rounded bg-dark-700 text-gray-300 hover:text-white">Rejeitados</button>
+        </div>
+      </div>
+
+      <div class="bg-dark-800 border border-dark-700 rounded-xl overflow-hidden shadow-sm">
+        <div class="overflow-x-auto custom-scrollbar">
+          <table class="w-full text-left text-xs font-mono">
+            <thead class="bg-dark-900/60 text-gray-400 uppercase tracking-wider border-b border-dark-700">
+              <tr>
+                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4">Token / Endereço</th>
+                <th class="py-3 px-4">DEX</th>
+                <th class="py-3 px-4">Liquidez Inicial</th>
+                <th class="py-3 px-4">Justificativa da Triagem (Hard Gate)</th>
+                <th class="py-3 px-4">Detecção</th>
+              </tr>
+            </thead>
+            <tbody id="tokens-table-body" class="divide-y divide-dark-700 text-gray-300">
+              <tr>
+                <td colspan="6" class="py-8 text-center text-gray-500">Carregando tokens...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: ORDENS EXECUTADAS -->
+    <div id="tab-orders" class="tab-content hidden space-y-4">
+      <div class="bg-dark-800 border border-dark-700 rounded-xl overflow-hidden shadow-sm">
+        <div class="px-6 py-4 border-b border-dark-700 flex justify-between items-center">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300">Livro de Execuções Contábeis</h2>
+          <span id="orders-count-badge" class="text-xs bg-dark-700 text-gray-300 px-2 py-0.5 rounded font-mono">0 ordens</span>
+        </div>
+        <div class="overflow-x-auto custom-scrollbar">
+          <table class="w-full text-left text-xs font-mono">
+            <thead class="bg-dark-900/60 text-gray-400 uppercase tracking-wider border-b border-dark-700">
+              <tr>
+                <th class="py-3 px-4">ID</th>
+                <th class="py-3 px-4">Posição #</th>
+                <th class="py-3 px-4">Tipo</th>
+                <th class="py-3 px-4">Modo</th>
+                <th class="py-3 px-4">Preço ($)</th>
+                <th class="py-3 px-4">Quantidade</th>
+                <th class="py-3 px-4">Total USD</th>
+                <th class="py-3 px-4">Data/Hora</th>
+              </tr>
+            </thead>
+            <tbody id="orders-table-body" class="divide-y divide-dark-700 text-gray-300">
+              <tr>
+                <td colspan="8" class="py-8 text-center text-gray-500">Nenhuma ordem executada ainda.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: ANALYTICS / MOTIVOS DE REJEIÇÃO -->
+    <div id="tab-analytics" class="tab-content hidden space-y-4">
+      <div class="bg-dark-800 border border-dark-700 rounded-xl p-6">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300 mb-2">Principais Motivos de Bloqueio (Hard Gates)</h2>
+        <p class="text-xs text-gray-400 mb-6">Contagem de tokens eliminados preventivamente para proteção do capital na Solana.</p>
+        
+        <div id="rejection-breakdown-list" class="space-y-4">
+          <p class="text-sm text-gray-500">Nenhum motivo registrado ainda.</p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- SCRIPTS -->
+  <script>
+    let currentTab = 'positions';
+    let refreshTimer = null;
+    let currentRefreshInterval = 2000;
+    let currentStatusFilter = 'ALL';
+    let searchDebounce = null;
+
+    function switchTab(tabId) {
+      currentTab = tabId;
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('border-brand-500', 'text-brand-500', 'font-semibold');
+        btn.classList.add('border-transparent', 'text-gray-400');
+      });
+
+      const activeTab = document.getElementById('tab-' + tabId);
+      const activeBtn = document.getElementById('tab-btn-' + tabId);
+      if (activeTab) activeTab.classList.remove('hidden');
+      if (activeBtn) {
+        activeBtn.classList.remove('border-transparent', 'text-gray-400');
+        activeBtn.classList.add('border-brand-500', 'text-brand-500', 'font-semibold');
+      }
+
+      refreshCurrentTab();
+    }
+
+    function setRefreshInterval(ms) {
+      currentRefreshInterval = ms;
+      if (refreshTimer) clearInterval(refreshTimer);
+
+      document.getElementById('btn-ref-2').className = ms === 2000 ? 'px-2 py-1 rounded bg-brand-600 text-white font-medium' : 'px-2 py-1 rounded text-gray-400 hover:text-white';
+      document.getElementById('btn-ref-5').className = ms === 5000 ? 'px-2 py-1 rounded bg-brand-600 text-white font-medium' : 'px-2 py-1 rounded text-gray-400 hover:text-white';
+      document.getElementById('btn-ref-0').className = ms === 0 ? 'px-2 py-1 rounded bg-brand-600 text-white font-medium' : 'px-2 py-1 rounded text-gray-400 hover:text-white';
+
+      if (ms > 0) {
+        refreshTimer = setInterval(refreshAll, ms);
+      }
+    }
+
+    async function fetchSummary() {
+      try {
+        const res = await fetch('/api/summary');
+        const json = await res.json();
+        if (json.status === 'success') {
+          const pnl = json.data.pnl;
+          const scanner = json.data.scanner;
+
+          const pnlVal = pnl.total_pnl_usd || 0.0;
+          const pnlEl = document.getElementById('kpi-pnl');
+          pnlEl.textContent = (pnlVal >= 0 ? '+$' : '-$') + Math.abs(pnlVal).toFixed(2);
+          pnlEl.className = 'text-2xl font-bold ' + (pnlVal > 0 ? 'text-brand-500' : pnlVal < 0 ? 'text-rose-500' : 'text-gray-200');
+
+          document.getElementById('kpi-winrate').textContent = (pnl.win_rate_pct || 0.0).toFixed(1) + '%';
+          document.getElementById('kpi-trades-count').textContent = (pnl.closed_positions || 0) + ' fechados';
+
+          document.getElementById('kpi-active-pos').textContent = pnl.active_positions || 0;
+          document.getElementById('kpi-allocated').textContent = '$' + (pnl.total_allocated_usd || 0.0).toFixed(2) + ' alocados';
+
+          document.getElementById('kpi-break-evens').textContent = pnl.break_evens || 0;
+
+          document.getElementById('kpi-tokens-total').textContent = scanner.total_scanned || 0;
+          document.getElementById('kpi-tokens-appr').textContent = (scanner.approved || 0) + ' aprovados (' + (scanner.approval_rate_pct || 0.0).toFixed(1) + '%)';
+          document.getElementById('kpi-tokens-rej').textContent = (scanner.rejected || 0) + ' rejeitados por Hard Gates';
+
+          renderAnalytics(scanner.rejection_reasons || {}, scanner.rejected || 0);
+        }
+      } catch (err) {
+        console.error('Erro ao atualizar sumário:', err);
+      }
+    }
+
+    async function fetchPositions() {
+      try {
+        const res = await fetch('/api/positions');
+        const json = await res.json();
+        if (json.status === 'success') {
+          const positions = json.data;
+          document.getElementById('positions-count-badge').textContent = positions.length + ' posições';
+          const tbody = document.getElementById('positions-table-body');
+          if (positions.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="10" class="py-8 text-center text-gray-500">Nenhuma posição aberta ou fechada até o momento.</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = positions.map(p => {
+            const pnl = p.realized_pnl_usd || 0.0;
+            const pnlColor = pnl > 0 ? 'text-brand-500' : pnl < 0 ? 'text-rose-500' : 'text-gray-400';
+            const statusBadge = p.status === 'OPEN' 
+              ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/60 text-emerald-400 border border-emerald-500/30">OPEN</span>'
+              : p.status === 'PARTIALLY_CLOSED'
+              ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-900/60 text-amber-400 border border-amber-500/30">PARTIAL</span>'
+              : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-800 text-gray-400">CLOSED</span>';
+
+            const beBadge = p.break_even_triggered 
+              ? '<span class="text-brand-500 font-semibold">✓ 50% Vendido</span>' 
+              : '<span class="text-gray-500">-</span>';
+
+            const shortAddr = p.token_address.slice(0, 4) + '...' + p.token_address.slice(-4);
+            const dateStr = p.opened_at ? new Date(p.opened_at).toLocaleTimeString() : '-';
+
+            return `
+              <tr class="hover:bg-dark-700/40 transition">
+                <td class="py-3 px-4 font-bold text-gray-400">#${p.id}</td>
+                <td class="py-3 px-4 font-mono text-gray-200" title="${p.token_address}">${shortAddr}</td>
+                <td class="py-3 px-4">${statusBadge}</td>
+                <td class="py-3 px-4">$${parseFloat(p.entry_price).toFixed(6)}</td>
+                <td class="py-3 px-4 text-emerald-400">$${parseFloat(p.highest_price_seen).toFixed(6)}</td>
+                <td class="py-3 px-4 text-amber-400">$${parseFloat(p.trailing_stop_price).toFixed(6)}</td>
+                <td class="py-3 px-4">$${parseFloat(p.allocated_capital_usd).toFixed(2)}</td>
+                <td class="py-3 px-4 font-bold ${pnlColor}">$${parseFloat(pnl).toFixed(2)}</td>
+                <td class="py-3 px-4">${beBadge}</td>
+                <td class="py-3 px-4 text-gray-400">${dateStr}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+      } catch (err) {
+        console.error('Erro ao buscar posições:', err);
+      }
+    }
+
+    async function fetchTokens() {
+      try {
+        const search = document.getElementById('token-search-input').value;
+        const url = `/api/tokens?status=${currentStatusFilter}&search=${encodeURIComponent(search)}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        if (json.status === 'success') {
+          const tokens = json.data;
+          const tbody = document.getElementById('tokens-table-body');
+          if (tokens.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-gray-500">Nenhum token encontrado com os filtros atuais.</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = tokens.map(t => {
+            const isApproved = t.security_status === 'APPROVED';
+            const badge = isApproved
+              ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-brand-900/60 text-brand-400 border border-brand-500/30">APROVADO</span>'
+              : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-900/60 text-rose-400 border border-rose-500/30">REJEITADO</span>';
+
+            const shortAddr = t.address.slice(0, 6) + '...' + t.address.slice(-6);
+            const tokenLabel = t.symbol ? `${t.symbol} (${shortAddr})` : shortAddr;
+            const liq = t.initial_liquidity_usd ? '$' + parseFloat(t.initial_liquidity_usd).toFixed(2) : '-';
+            const reason = t.rejection_reason ? `<span class="text-rose-300 font-medium">${t.rejection_reason}</span>` : '<span class="text-brand-400 font-medium">Aprovado em todos os Hard Gates</span>';
+            const dateStr = t.detection_timestamp ? new Date(t.detection_timestamp).toLocaleTimeString() : '-';
+
+            return `
+              <tr class="hover:bg-dark-700/40 transition">
+                <td class="py-3 px-4">${badge}</td>
+                <td class="py-3 px-4 font-mono font-medium text-gray-200" title="${t.address}">${tokenLabel}</td>
+                <td class="py-3 px-4 uppercase text-gray-400">${t.dex || 'raydium'}</td>
+                <td class="py-3 px-4 text-gray-300">${liq}</td>
+                <td class="py-3 px-4 max-w-md truncate" title="${t.rejection_reason || ''}">${reason}</td>
+                <td class="py-3 px-4 text-gray-500">${dateStr}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+      } catch (err) {
+        console.error('Erro ao buscar tokens:', err);
+      }
+    }
+
+    async function fetchOrders() {
+      try {
+        const res = await fetch('/api/orders');
+        const json = await res.json();
+        if (json.status === 'success') {
+          const orders = json.data;
+          document.getElementById('orders-count-badge').textContent = orders.length + ' ordens';
+          const tbody = document.getElementById('orders-table-body');
+          if (orders.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="py-8 text-center text-gray-500">Nenhuma ordem executada no livro contábil.</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = orders.map(o => {
+            const typeColor = o.order_type === 'BUY' ? 'text-brand-400 font-bold' : o.order_type.includes('PROFIT') ? 'text-amber-400 font-bold' : 'text-rose-400 font-bold';
+            const dateStr = o.executed_at ? new Date(o.executed_at).toLocaleTimeString() : '-';
+
+            return `
+              <tr class="hover:bg-dark-700/40 transition">
+                <td class="py-3 px-4 text-gray-500 font-mono">#${o.id}</td>
+                <td class="py-3 px-4 font-mono text-gray-300">#${o.position_id}</td>
+                <td class="py-3 px-4 ${typeColor}">${o.order_type}</td>
+                <td class="py-3 px-4 text-gray-400">${o.mode}</td>
+                <td class="py-3 px-4">$${parseFloat(o.price).toFixed(6)}</td>
+                <td class="py-3 px-4">${parseFloat(o.amount).toFixed(2)}</td>
+                <td class="py-3 px-4 font-bold text-gray-200">$${parseFloat(o.total_usd).toFixed(2)}</td>
+                <td class="py-3 px-4 text-gray-500">${dateStr}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+      } catch (err) {
+        console.error('Erro ao buscar ordens:', err);
+      }
+    }
+
+    function renderAnalytics(reasons, totalRejected) {
+      const container = document.getElementById('rejection-breakdown-list');
+      const entries = Object.entries(reasons);
+      if (entries.length === 0) {
+        container.innerHTML = '<p class="text-sm text-gray-500">Nenhum token reprovado registrado até o momento.</p>';
+        return;
+      }
+
+      container.innerHTML = entries.map(([reason, count]) => {
+        const pct = totalRejected > 0 ? (count / totalRejected * 100).toFixed(1) : 0;
+        return `
+          <div class="space-y-1">
+            <div class="flex justify-between text-xs font-mono">
+              <span class="text-gray-300 truncate max-w-xl" title="${reason}">${reason}</span>
+              <span class="text-gray-400">${count} (${pct}%)</span>
+            </div>
+            <div class="w-full bg-dark-900 rounded-full h-2 overflow-hidden border border-dark-700">
+              <div class="bg-rose-500 h-2 rounded-full" style="width: ${pct}%"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function filterTokensByStatus(status) {
+      currentStatusFilter = status;
+      document.getElementById('filter-all').className = status === 'ALL' ? 'px-3 py-1.5 rounded bg-brand-600 text-white font-medium' : 'px-3 py-1.5 rounded bg-dark-700 text-gray-300 hover:text-white';
+      document.getElementById('filter-approved').className = status === 'APPROVED' ? 'px-3 py-1.5 rounded bg-brand-600 text-white font-medium' : 'px-3 py-1.5 rounded bg-dark-700 text-gray-300 hover:text-white';
+      document.getElementById('filter-rejected').className = status === 'REJECTED' ? 'px-3 py-1.5 rounded bg-brand-600 text-white font-medium' : 'px-3 py-1.5 rounded bg-dark-700 text-gray-300 hover:text-white';
+      fetchTokens();
+    }
+
+    function debounceFilterTokens() {
+      if (searchDebounce) clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(fetchTokens, 300);
+    }
+
+    function refreshCurrentTab() {
+      if (currentTab === 'positions') fetchPositions();
+      else if (currentTab === 'tokens') fetchTokens();
+      else if (currentTab === 'orders') fetchOrders();
+    }
+
+    function refreshAll() {
+      fetchSummary();
+      refreshCurrentTab();
+    }
+
+    // Inicialização
+    refreshAll();
+    setRefreshInterval(2000);
+  </script>
+</body>
+</html>
+

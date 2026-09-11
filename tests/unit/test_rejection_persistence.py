@@ -3,8 +3,9 @@ Testes Unitários para Persistência de Auditoria e Rejeições no SQLite.
 Garante que todo token reprovado é gravado com status REJECTED e justificativa.
 """
 
-import os
 from decimal import Decimal
+from pathlib import Path
+
 import pytest
 
 from src.database.connection import DatabaseManager
@@ -14,10 +15,8 @@ from src.security.validator import SecurityValidator
 
 
 @pytest.mark.asyncio
-async def test_rejection_persistence_low_liquidity():
-    db_path = "data/test_rejection.db"
-    if os.path.exists(db_path):
-        os.remove(db_path)
+async def test_rejection_persistence_low_liquidity(tmp_path: Path):
+    db_path = str(tmp_path / "test_rejection.db")
 
     db = DatabaseManager(db_path)
     await db.initialize()
@@ -51,15 +50,11 @@ async def test_rejection_persistence_low_liquidity():
     assert float(saved_after["security_score"]) == 0.0
 
     await db.close()
-    if os.path.exists(db_path):
-        os.remove(db_path)
 
 
 @pytest.mark.asyncio
-async def test_rejection_persistence_active_mint():
-    db_path = "data/test_rejection_mint.db"
-    if os.path.exists(db_path):
-        os.remove(db_path)
+async def test_rejection_persistence_active_mint(tmp_path: Path):
+    db_path = str(tmp_path / "test_rejection_mint.db")
 
     db = DatabaseManager(db_path)
     await db.initialize()
@@ -85,6 +80,4 @@ async def test_rejection_persistence_active_mint():
     assert "Mint Authority ATIVA" in (saved["rejection_reason"] or "")
 
     await db.close()
-    if os.path.exists(db_path):
-        os.remove(db_path)
 

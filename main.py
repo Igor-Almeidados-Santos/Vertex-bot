@@ -7,9 +7,8 @@ Execução (Paper/Live) e Gerenciamento Contínuo de Risco.
 import argparse
 import asyncio
 import signal
-import sys
 from decimal import Decimal
-from typing import Any, List
+from typing import Any
 
 from src.config.settings import Settings, get_settings
 from src.database.connection import DatabaseManager
@@ -19,9 +18,9 @@ from src.engine.paper import PaperExecutionEngine
 from src.engine.risk import RiskManager
 from src.engine.tracker import PositionTracker
 from src.scanner.client import ResilientRPCClient
-from src.scanner.listener import WebSocketScanner, create_scanner
+from src.scanner.listener import create_scanner
 from src.security.validator import SecurityValidator
-from src.utils.logger import mask_sensitive, setup_logger
+from src.utils.logger import setup_logger
 from src.utils.metrics import TelemetryCollector
 
 logger = setup_logger("vertex.main")
@@ -87,7 +86,7 @@ class VertexBotOrchestrator:
 
         self.is_running: bool = False
         self.run_mock_stream: bool = False
-        self._tasks: List[asyncio.Task[None]] = []
+        self._tasks: list[asyncio.Task[None]] = []
 
     async def initialize(self) -> None:
         """Inicializa banco de dados e carrega posições abertas pré-existentes."""
@@ -248,6 +247,30 @@ class VertexBotOrchestrator:
         logger.info("Vertex-bot finalizado com segurança.")
 
 
+async def _start_background_dashboard(db: DatabaseManager, port: int) -> tuple[object, int]:
+    """Inicia o servidor aiohttp do dashboard em background buscando porta livre."""
+    from aiohttp import web
+
+    from src.dashboard.server import create_dashboard_app
+
+    dash_app = create_dashboard_app(db)
+    runner = web.AppRunner(dash_app)
+    await runner.setup()
+    bound_port = port
+    for p in range(port, port + 20):
+        try:
+            dash_site = web.TCPSite(runner, "0.0.0.0", p)
+            await dash_site.start()
+            bound_port = p
+            break
+        except OSError as exc:
+            if exc.errno == 98 and p < port + 19:
+                continue
+            raise
+    logger.info("Dashboard Web ativo em: http://localhost:%d", bound_port)
+    return runner, bound_port
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Vertex-bot Trading & Scanning Engine")
     parser.add_argument(
@@ -260,6 +283,17 @@ async def main() -> None:
         choices=["indexed", "rpc"],
         help="Seleciona o provedor do scanner: 'indexed' (DexScreener/Photon) ou 'rpc' (WebSocket bruto)",
     )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Inicia o Dashboard Web em segundo plano (padrão na porta 8080)",
+    )
+    parser.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=8080,
+        help="Porta para o Dashboard Web (padrão: 8080)",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
@@ -268,33 +302,42 @@ async def main() -> None:
 
     orchestrator = VertexBotOrchestrator(settings)
 
-    # Configuração de captura de sinais SIGINT e SIGTERM
     loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
 
     def handle_exit() -> None:
         logger.info("Sinal de encerramento recebido. Desligando...")
+        stop_event.set()
         asyncio.create_task(orchestrator.stop())
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, handle_exit)
         except NotImplementedError:
-            pass  # Windows fallback
+            pass
 
     await orchestrator.initialize()
-    await orchestrator.start(run_mock_stream=args.simulate_mock_stream)
 
-    if args.simulate_mock_stream:
-        # No modo mock de demonstração, aguarda 8 segundos para a simulação completar e encerra
-        await asyncio.sleep(8.0)
-        await orchestrator.stop()
-    else:
-        # No modo normal, roda indefinidamente até sinal de interrupção
-        try:
-            while orchestrator.is_running:
-                await asyncio.sleep(1.0)
-        except asyncio.CancelledError:
-            pass
+    dashboard_runner: Any = None
+    if args.dashboard:
+        dashboard_runner, _ = await _start_background_dashboard(orchestrator.db, args.dashboard_port)
+
+    try:
+        await orchestrator.start(run_mock_stream=args.simulate_mock_stream)
+
+        if args.simulate_mock_stream:
+            # No modo mock de demonstração, aguarda 8 segundos para a simulação completar e encerra
+            await asyncio.sleep(8.0)
+            await orchestrator.stop()
+        else:
+            # No modo normal, aguarda sinal de interrupção
+            try:
+                await stop_event.wait()
+            except asyncio.CancelledError:
+                pass
+    finally:
+        if dashboard_runner:
+            await dashboard_runner.cleanup()
 
 
 if __name__ == "__main__":

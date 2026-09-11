@@ -2,9 +2,7 @@
 Rastreador Assíncrono do Ciclo de Vida das Posições (Finite State Machine).
 """
 
-import asyncio
 from decimal import Decimal
-from typing import Dict, Optional
 
 from src.database.models import PositionState, PositionStatus
 from src.database.repository import PositionsRepository
@@ -27,7 +25,7 @@ class PositionTracker:
         self.engine: IExecutionEngine = engine
         self.positions_repo: PositionsRepository = positions_repo
         self.risk_manager: RiskManager = risk_manager
-        self.active_positions: Dict[int, PositionState] = {}
+        self.active_positions: dict[int, PositionState] = {}
         self.is_running: bool = False
 
     async def register_position(self, position: PositionState) -> None:

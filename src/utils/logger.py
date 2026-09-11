@@ -7,8 +7,8 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 
 class JSONFormatter(logging.Formatter):
@@ -16,7 +16,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_data: dict[str, Any] = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "module": record.name,
             "message": record.getMessage(),
@@ -39,7 +39,7 @@ class JSONFormatter(logging.Formatter):
 def setup_logger(
     name: str = "vertex",
     log_level: str = "INFO",
-    log_file: Optional[str] = "logs/vertex.log",
+    log_file: str | None = "logs/vertex.log",
 ) -> logging.Logger:
     """Configura e retorna uma instância configurada do logger do Vertex-bot."""
     logger = logging.getLogger(name)

@@ -1,129 +1,67 @@
 """
 Modelos de Domínio e Estado em Memória do Vertex-bot.
-Compatível com Pydantic v2 (context/DATA_SCHEMA.md) e fallback nativo.
+Compatível com Pydantic v2 (context/DATA_SCHEMA.md).
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from enum import Enum
-import json
-from typing import Any, Dict, Optional
+from enum import StrEnum
+from typing import Any
 
-try:
-    from pydantic import BaseModel, ConfigDict, Field
-
-    HAS_PYDANTIC = True
-
-    class _PydanticFrozenModel(BaseModel):
-        model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
-
-        def to_dict(self) -> Dict[str, Any]:
-            return self.model_dump()
-
-    class _PydanticMutableModel(BaseModel):
-        model_config = ConfigDict(frozen=False, arbitrary_types_allowed=True)
-
-        def to_dict(self) -> Dict[str, Any]:
-            return self.model_dump()
-
-except ImportError:
-    HAS_PYDANTIC = False
-
-    class _PydanticFrozenModel:  # type: ignore
-        def __init__(self, **kwargs: Any) -> None:
-            for k, v in kwargs.items():
-                object.__setattr__(self, k, v)
-
-        def model_dump(self) -> Dict[str, Any]:
-            return {
-                k: (v.value if isinstance(v, Enum) else v)
-                for k, v in self.__dict__.items()
-                if not k.startswith("_")
-            }
-
-        def model_dump_json(self) -> str:
-            def _serialize(obj: Any) -> Any:
-                if isinstance(obj, (Decimal, datetime)):
-                    return str(obj)
-                if isinstance(obj, Enum):
-                    return obj.value
-                return obj
-
-            return json.dumps(self.model_dump(), default=_serialize)
-
-        def to_dict(self) -> Dict[str, Any]:
-            return self.model_dump()
-
-    class _PydanticMutableModel(_PydanticFrozenModel):  # type: ignore
-        def __setattr__(self, name: str, value: Any) -> None:
-            super().__setattr__(name, value)
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class SecurityStatus(str, Enum):
+class SecurityStatus(StrEnum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
 
 
-class PositionStatus(str, Enum):
+class PositionStatus(StrEnum):
     OPEN = "OPEN"
     PARTIALLY_CLOSED = "PARTIALLY_CLOSED"
     CLOSED = "CLOSED"
     STOPPED = "STOPPED"
 
 
-class OrderType(str, Enum):
+class OrderType(StrEnum):
     BUY = "BUY"
     TAKE_PROFIT_PARTIAL = "TAKE_PROFIT_PARTIAL"
     TRAILING_STOP_EXIT = "TRAILING_STOP_EXIT"
     EMERGENCY_EXIT = "EMERGENCY_EXIT"
 
 
-class ExecutionMode(str, Enum):
+class ExecutionMode(StrEnum):
     PAPER = "PAPER"
     LIVE = "LIVE"
 
 
-class TokenMetadata(_PydanticFrozenModel):
+class TokenMetadata(BaseModel):
     """Metadados de um token detectado pelo Scanner On-Chain."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     address: str
     chain: str = "solana"
     dex: str = "raydium"
-    pool_address: Optional[str] = None
+    pool_address: str | None = None
     initial_liquidity_usd: Decimal = Decimal("0.0")
-    symbol: Optional[str] = None
-    name: Optional[str] = None
-    detection_timestamp: Optional[datetime] = None
-    raw_event: Optional[Dict[str, Any]] = None
+    symbol: str | None = None
+    name: str | None = None
+    detection_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    raw_event: dict[str, Any] = Field(default_factory=dict)
 
-    def __init__(
-        self,
-        address: str,
-        chain: str = "solana",
-        dex: str = "raydium",
-        pool_address: Optional[str] = None,
-        initial_liquidity_usd: Decimal = Decimal("0.0"),
-        symbol: Optional[str] = None,
-        name: Optional[str] = None,
-        detection_timestamp: Optional[datetime] = None,
-        raw_event: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            address=address,
-            chain=chain,
-            dex=dex,
-            pool_address=pool_address,
-            initial_liquidity_usd=initial_liquidity_usd,
-            symbol=symbol,
-            name=name,
-            detection_timestamp=detection_timestamp or datetime.now(timezone.utc),
-            raw_event=raw_event or {},
-            **kwargs,
-        )
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "detection_timestamp" in data and data["detection_timestamp"] is None:
+                data["detection_timestamp"] = datetime.now(UTC)
+            if "raw_event" in data and data["raw_event"] is None:
+                data["raw_event"] = {}
+        return data
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "address": self.address,
             "chain": self.chain,
@@ -138,8 +76,10 @@ class TokenMetadata(_PydanticFrozenModel):
         }
 
 
-class SecurityAuditResult(_PydanticFrozenModel):
+class SecurityAuditResult(BaseModel):
     """Laudo detalhado de auditoria de segurança e triagem (Hard Gates)."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     token_address: str
     status: SecurityStatus
@@ -152,48 +92,22 @@ class SecurityAuditResult(_PydanticFrozenModel):
     is_honeypot: bool
     buy_tax_percentage: float
     sell_tax_percentage: float
-    rejection_reason: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
+    rejection_reason: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
 
-    def __init__(
-        self,
-        token_address: str,
-        status: SecurityStatus,
-        security_score: float,
-        is_mint_revoked: bool,
-        is_freeze_revoked: bool,
-        is_lp_burned_or_locked: bool,
-        lp_burn_percentage: float,
-        top10_holder_percentage: float,
-        is_honeypot: bool,
-        buy_tax_percentage: float,
-        sell_tax_percentage: float,
-        rejection_reason: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            token_address=token_address,
-            status=status,
-            security_score=security_score,
-            is_mint_revoked=is_mint_revoked,
-            is_freeze_revoked=is_freeze_revoked,
-            is_lp_burned_or_locked=is_lp_burned_or_locked,
-            lp_burn_percentage=lp_burn_percentage,
-            top10_holder_percentage=top10_holder_percentage,
-            is_honeypot=is_honeypot,
-            buy_tax_percentage=buy_tax_percentage,
-            sell_tax_percentage=sell_tax_percentage,
-            rejection_reason=rejection_reason,
-            details=details or {},
-            **kwargs,
-        )
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "details" in data and data["details"] is None:
+                data["details"] = {}
+        return data
 
     @property
     def is_approved(self) -> bool:
         return self.status == SecurityStatus.APPROVED
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "token_address": self.token_address,
             "status": self.status.value,
@@ -207,12 +121,14 @@ class SecurityAuditResult(_PydanticFrozenModel):
             "buy_tax_percentage": self.buy_tax_percentage,
             "sell_tax_percentage": self.sell_tax_percentage,
             "rejection_reason": self.rejection_reason,
-            "details": self.details or {},
+            "details": self.details,
         }
 
 
-class PositionState(_PydanticMutableModel):
+class PositionState(BaseModel):
     """Estado mutável de uma posição ativa ou encerrada."""
+
+    model_config = ConfigDict(frozen=False, arbitrary_types_allowed=True)
 
     token_address: str
     mode: ExecutionMode
@@ -220,60 +136,35 @@ class PositionState(_PydanticMutableModel):
     initial_token_amount: Decimal
     allocated_capital_usd: Decimal
     trailing_drop_pct: Decimal = Decimal("0.12")
-    id: Optional[int] = None
+    id: int | None = None
     status: PositionStatus = PositionStatus.OPEN
     remaining_token_amount: Decimal = Decimal("0.0")
     realized_pnl_usd: Decimal = Decimal("0.0")
     highest_price_seen: Decimal = Decimal("0.0")
     break_even_triggered: bool = False
     trailing_stop_price: Decimal = Decimal("0.0")
-    opened_at: Optional[datetime] = None
-    closed_at: Optional[datetime] = None
+    opened_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    closed_at: datetime | None = None
 
-    def __init__(
-        self,
-        token_address: str,
-        mode: ExecutionMode,
-        entry_price: Decimal,
-        initial_token_amount: Decimal,
-        allocated_capital_usd: Decimal,
-        trailing_drop_pct: Decimal = Decimal("0.12"),
-        id: Optional[int] = None,
-        status: PositionStatus = PositionStatus.OPEN,
-        remaining_token_amount: Optional[Decimal] = None,
-        realized_pnl_usd: Decimal = Decimal("0.0"),
-        highest_price_seen: Optional[Decimal] = None,
-        break_even_triggered: bool = False,
-        trailing_stop_price: Optional[Decimal] = None,
-        opened_at: Optional[datetime] = None,
-        closed_at: Optional[datetime] = None,
-        **kwargs: Any,
-    ) -> None:
-        rem = remaining_token_amount if remaining_token_amount is not None else initial_token_amount
-        high = highest_price_seen if highest_price_seen is not None else entry_price
-        stop = (
-            trailing_stop_price
-            if trailing_stop_price is not None
-            else entry_price * (Decimal("1.0") - trailing_drop_pct)
-        )
-        super().__init__(
-            token_address=token_address,
-            mode=mode,
-            entry_price=entry_price,
-            initial_token_amount=initial_token_amount,
-            allocated_capital_usd=allocated_capital_usd,
-            trailing_drop_pct=trailing_drop_pct,
-            id=id,
-            status=status,
-            remaining_token_amount=rem,
-            realized_pnl_usd=realized_pnl_usd,
-            highest_price_seen=high,
-            break_even_triggered=break_even_triggered,
-            trailing_stop_price=stop,
-            opened_at=opened_at or datetime.now(timezone.utc),
-            closed_at=closed_at,
-            **kwargs,
-        )
+    @model_validator(mode="before")
+    @classmethod
+    def _set_dynamic_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            init_amount = data.get("initial_token_amount")
+            if (data.get("remaining_token_amount") is None or "remaining_token_amount" not in data) and init_amount is not None:
+                data["remaining_token_amount"] = init_amount
+            entry = data.get("entry_price")
+            if (data.get("highest_price_seen") is None or "highest_price_seen" not in data) and entry is not None:
+                data["highest_price_seen"] = entry
+            drop = data.get("trailing_drop_pct", Decimal("0.12"))
+            if isinstance(drop, (int, float, str)):
+                drop = Decimal(str(drop))
+            if (data.get("trailing_stop_price") is None or "trailing_stop_price" not in data) and entry is not None:
+                entry_dec = Decimal(str(entry)) if not isinstance(entry, Decimal) else entry
+                data["trailing_stop_price"] = entry_dec * (Decimal("1.0") - drop)
+            if "opened_at" in data and data["opened_at"] is None:
+                data["opened_at"] = datetime.now(UTC)
+        return data
 
     def update_price_and_trailing_stop(self, current_price: Decimal) -> None:
         """Atualiza a máxima histórica registrada e eleva o trailing stop dinâmico."""
@@ -313,8 +204,6 @@ class PositionState(_PydanticMutableModel):
         sell_amount = self.remaining_token_amount
         revenue_usd = sell_amount * execution_price
 
-        # Se o break-even já ocorreu, o restante é lucro puro (custo base remanescente = 0)
-        # Se não ocorreu, o custo base remanescente é o capital inicial
         remaining_cost_basis = (
             Decimal("0.0") if self.break_even_triggered else self.allocated_capital_usd
         )
@@ -323,12 +212,17 @@ class PositionState(_PydanticMutableModel):
         self.remaining_token_amount = Decimal("0.0")
         self.realized_pnl_usd += pnl_usd
         self.status = PositionStatus.CLOSED if reason != "STOPPED" else PositionStatus.STOPPED
-        self.closed_at = datetime.now(timezone.utc)
+        self.closed_at = datetime.now(UTC)
         return sell_amount
 
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump()
 
-class OrderExecution(_PydanticFrozenModel):
+
+class OrderExecution(BaseModel):
     """Registro contábil e imutável de execução de ordem."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     position_id: int
     order_type: OrderType
@@ -336,41 +230,20 @@ class OrderExecution(_PydanticFrozenModel):
     price: Decimal
     amount: Decimal
     total_usd: Decimal
-    id: Optional[int] = None
-    tx_hash: Optional[str] = None
+    id: int | None = None
+    tx_hash: str | None = None
     fee_cost_usd: Decimal = Decimal("0.0")
     slippage_realized: float = 0.0
-    notes: Optional[str] = None
-    executed_at: Optional[datetime] = None
+    notes: str | None = None
+    executed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-    def __init__(
-        self,
-        position_id: int,
-        order_type: OrderType,
-        mode: ExecutionMode,
-        price: Decimal,
-        amount: Decimal,
-        total_usd: Decimal,
-        id: Optional[int] = None,
-        tx_hash: Optional[str] = None,
-        fee_cost_usd: Decimal = Decimal("0.0"),
-        slippage_realized: float = 0.0,
-        notes: Optional[str] = None,
-        executed_at: Optional[datetime] = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            position_id=position_id,
-            order_type=order_type,
-            mode=mode,
-            price=price,
-            amount=amount,
-            total_usd=total_usd,
-            id=id,
-            tx_hash=tx_hash,
-            fee_cost_usd=fee_cost_usd,
-            slippage_realized=slippage_realized,
-            notes=notes,
-            executed_at=executed_at or datetime.now(timezone.utc),
-            **kwargs,
-        )
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "executed_at" in data and data["executed_at"] is None:
+                data["executed_at"] = datetime.now(UTC)
+        return data
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump()

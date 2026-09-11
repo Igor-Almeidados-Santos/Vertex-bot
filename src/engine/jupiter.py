@@ -4,6 +4,7 @@ Prepara o bot para execução com as melhores rotas de liquidez e slippage dinâ
 """
 
 import asyncio
+
 try:
     import aiohttp
     HAS_AIOHTTP = True
@@ -14,8 +15,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from src.utils.logger import setup_logger
 
@@ -36,7 +36,7 @@ class JupiterSwapClient:
         self.quote_api_url: str = quote_api_url
         self.swap_api_url: str = swap_api_url
         self.timeout_seconds: float = timeout_seconds
-        self._session: Optional[Any] = None
+        self._session: Any | None = None
 
     async def _get_session(self) -> Any:
         if HAS_AIOHTTP:
@@ -103,8 +103,8 @@ class JupiterSwapClient:
         output_mint: str,
         amount_lamports: int,
         slippage_bps: int = 150,  # 150 bps = 1.5%
-        mock_override: Optional[dict[str, Any]] = None,
-    ) -> Optional[dict[str, Any]]:
+        mock_override: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """
         Obtém a melhor rota e cotação para o par na Jupiter.
         Retorna o dicionário de quote ou None se a rota não estiver disponível.
@@ -142,8 +142,8 @@ class JupiterSwapClient:
         quote_response: dict[str, Any],
         user_public_key: str,
         priority_fee_lamports: int = 50000,
-        mock_override: Optional[dict[str, Any]] = None,
-    ) -> Optional[str]:
+        mock_override: dict[str, Any] | None = None,
+    ) -> str | None:
         """
         Solicita a serialização da transação de swap pronta para assinatura.
         Retorna a transação serializada em base64.
@@ -160,7 +160,7 @@ class JupiterSwapClient:
 
         try:
             res = await self._async_post(self.swap_api_url, payload)
-            swap_tx: Optional[str] = res.get("swapTransaction")
+            swap_tx: str | None = res.get("swapTransaction")
             if swap_tx:
                 logger.info("Transação de swap Jupiter gerada com sucesso para %s", user_public_key[:8])
                 return swap_tx

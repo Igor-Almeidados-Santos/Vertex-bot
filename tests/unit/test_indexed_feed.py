@@ -4,6 +4,7 @@ Testes Unitários para o Scanner de Feeds Indexados (Photon / DexScreener).
 
 import asyncio
 from decimal import Decimal
+
 import pytest
 
 from src.scanner.indexed_feed import IndexedFeedScanner

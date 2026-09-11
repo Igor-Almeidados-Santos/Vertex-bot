@@ -5,6 +5,7 @@ Cliente RPC Assíncrono com Suporte a Failover e Retry Exponencial.
 import asyncio
 import json
 import random
+
 try:
     import aiohttp
     HAS_AIOHTTP = True
@@ -13,7 +14,7 @@ except ImportError:
 
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import Any, cast
 
 from src.utils.exceptions import RPCConnectionError
 from src.utils.logger import setup_logger
@@ -27,17 +28,17 @@ class ResilientRPCClient:
     def __init__(
         self,
         primary_url: str,
-        secondary_url: Optional[str] = None,
+        secondary_url: str | None = None,
         max_retries: int = 3,
         timeout_seconds: float = 8.0,
     ) -> None:
         self.primary_url: str = primary_url
-        self.secondary_url: Optional[str] = secondary_url
+        self.secondary_url: str | None = secondary_url
         self.max_retries: int = max_retries
         self.timeout_seconds: float = timeout_seconds
         self._current_url: str = primary_url
         self._request_id: int = 1
-        self._session: Optional[Any] = None
+        self._session: Any | None = None
 
     def _get_next_id(self) -> int:
         self._request_id += 1
@@ -61,7 +62,7 @@ class ResilientRPCClient:
         )
         with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
             data = resp.read()
-            return json.loads(data.decode("utf-8"))
+            return cast(dict[str, Any], json.loads(data.decode("utf-8")))
 
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Envia requisição JSON usando aiohttp se disponível ou fallback."""
@@ -69,7 +70,8 @@ class ResilientRPCClient:
             session = await self._get_session()
             headers = {"Content-Type": "application/json", "User-Agent": "Vertex-bot/1.0"}
             async with session.post(url, json=payload, headers=headers) as resp:
-                return await resp.json()  # type: ignore
+                data = await resp.json()
+                return cast(dict[str, Any], data)
         else:
             payload_bytes = json.dumps(payload).encode("utf-8")
             return await asyncio.to_thread(self._sync_post, url, payload_bytes)

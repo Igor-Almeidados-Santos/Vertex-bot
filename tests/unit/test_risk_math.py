@@ -4,7 +4,6 @@ Garante precisão decimal sem imprecisão de ponto flutuante.
 """
 
 from decimal import Decimal
-import pytest
 
 from src.database.models import ExecutionMode, PositionState, PositionStatus
 from src.engine.risk import RiskManager

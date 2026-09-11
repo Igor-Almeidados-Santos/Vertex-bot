@@ -2,10 +2,9 @@
 Testes Unitários para o Cliente de Roteamento Jupiter Swap v6.
 """
 
-import asyncio
 import pytest
 
-from src.engine.jupiter import JupiterSwapClient, WSOL_MINT
+from src.engine.jupiter import WSOL_MINT, JupiterSwapClient
 
 
 @pytest.mark.asyncio

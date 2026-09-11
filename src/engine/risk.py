@@ -4,7 +4,6 @@ Implementa regras matemáticas estritas de Break-Even e Trailing Stop contínuo.
 """
 
 from decimal import Decimal
-from typing import Optional, Tuple
 
 from src.database.models import PositionState
 from src.utils.logger import setup_logger
@@ -29,7 +28,7 @@ class RiskManager:
         self,
         position: PositionState,
         current_price: Decimal,
-    ) -> Optional[Tuple[str, Decimal]]:
+    ) -> tuple[str, Decimal] | None:
         """
         Avalia o preço atual contra o estado da posição.
         Retorna (motivo_saida, quantidade_tokens_a_vender) se houver gatilho de saída; caso contrário, None.

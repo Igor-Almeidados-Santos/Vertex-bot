@@ -3,12 +3,11 @@ Parser de Logs On-Chain para Detecção de Novos Pares em DEXes (Solana).
 Suporte a Raydium AMM v4 e Pump.fun Bonding Curves.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from src.database.models import TokenMetadata
-from src.utils.exceptions import ParseError
 from src.utils.logger import setup_logger
 
 logger = setup_logger("vertex.scanner.parser")
@@ -24,7 +23,7 @@ class OnChainLogParser:
     """Decodifica notificações de logs WebSocket da Solana para identificar novos pares."""
 
     @staticmethod
-    def parse_log_notification(payload: dict[str, Any]) -> Optional[TokenMetadata]:
+    def parse_log_notification(payload: dict[str, Any]) -> TokenMetadata | None:
         """
         Avalia o payload de log retornado pelo WebSocket RPC e extrai dados do par detectado.
         Retorna TokenMetadata se for um novo par válido; caso contrário, None.
@@ -56,7 +55,7 @@ class OnChainLogParser:
             return None
 
     @staticmethod
-    def _parse_raydium(logs: list[str], signature: str) -> Optional[TokenMetadata]:
+    def _parse_raydium(logs: list[str], signature: str) -> TokenMetadata | None:
         """Identifica a instrução 'initialize2' do Raydium AMM v4."""
         is_raydium = False
         is_initialize = False
@@ -81,13 +80,13 @@ class OnChainLogParser:
                 dex="raydium",
                 pool_address=None,
                 initial_liquidity_usd=Decimal("5000.0"),  # Baseline para auditoria
-                detection_timestamp=datetime.now(timezone.utc),
+                detection_timestamp=datetime.now(UTC),
                 raw_event={"signature": signature, "dex": "raydium"},
             )
         return None
 
     @staticmethod
-    def _parse_pumpfun(logs: list[str], signature: str) -> Optional[TokenMetadata]:
+    def _parse_pumpfun(logs: list[str], signature: str) -> TokenMetadata | None:
         """Identifica a criação de nova bonding curve no Pump.fun."""
         is_pump = False
         is_create = False
@@ -110,7 +109,7 @@ class OnChainLogParser:
                 dex="pumpfun",
                 pool_address=None,
                 initial_liquidity_usd=Decimal("6000.0"),
-                detection_timestamp=datetime.now(timezone.utc),
+                detection_timestamp=datetime.now(UTC),
                 raw_event={"signature": signature, "dex": "pumpfun"},
             )
         return None

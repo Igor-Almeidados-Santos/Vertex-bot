@@ -24,7 +24,7 @@
 ### 2.1. Concorrência e Comunicação de Rede
 - **`asyncio`** (Standard Library): Controle central do Event Loop, filas (`Queue`), tarefas e primitivas de sincronização.
 - **`aiohttp` (`>= 3.9.0`)**: Cliente HTTP assíncrono para chamadas REST a endpoints RPC, APIs de DEXes e agregadores de preço.
-- **`websockets` (`>= 12.0`)**: Conexão persistente de baixa latência para streaming de logs de blocos e transações.
+- **`websockets` (`>= 10.0, < 12.0`)**: Conexão persistente de baixa latência para streaming de logs de blocos e transações (restrição exigida pelo SDK `solana-py 0.34.x`).
 
 ### 2.2. Integração Blockchain, Agregadores e Web3
 - **Solana Stack**:

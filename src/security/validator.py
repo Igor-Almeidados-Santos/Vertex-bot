@@ -3,9 +3,7 @@ Validador Central de Segurança do Vertex-bot (Camada de Triagem).
 Executa os 6 Hard Gates de proteção de capital e emite laudo de auditoria.
 """
 
-import asyncio
 from decimal import Decimal
-from typing import Optional
 
 from src.database.models import SecurityAuditResult, SecurityStatus, TokenMetadata
 from src.database.repository import TokensRepository
@@ -23,13 +21,13 @@ class SecurityValidator:
     def __init__(
         self,
         tokens_repo: TokensRepository,
-        rpc_client: Optional[ResilientRPCClient] = None,
+        rpc_client: ResilientRPCClient | None = None,
         min_liquidity_usd: Decimal = Decimal("5000.0"),
         max_top10_pct: float = 15.0,
         max_tax_pct: float = 3.0,
     ) -> None:
         self.tokens_repo: TokensRepository = tokens_repo
-        self.rpc_client: Optional[ResilientRPCClient] = rpc_client
+        self.rpc_client: ResilientRPCClient | None = rpc_client
         self.min_liquidity_usd: Decimal = min_liquidity_usd
         self.max_top10_pct: float = max_top10_pct
         self.max_tax_pct: float = max_tax_pct
@@ -37,7 +35,7 @@ class SecurityValidator:
     async def audit_token(
         self,
         token: TokenMetadata,
-        mock_overrides: Optional[dict[str, object]] = None,
+        mock_overrides: dict[str, object] | None = None,
     ) -> SecurityAuditResult:
         """
         Executa os Hard Gates sequencialmente. Ao primeiro sinal de perigo, reprova o token.
@@ -80,8 +78,10 @@ class SecurityValidator:
 
         # 4. Checagem de LP Queimada / Bloqueada
         is_lp_safe, burn_pct = await SecurityChecks.check_lp_status(
-            token.pool_address,
-            self.rpc_client,
+            pool_address=token.pool_address,
+            token_address=token.address,
+            dex=token.dex,
+            rpc_client=self.rpc_client,
             mock_burn_pct=mo.get("lp_burn_pct") if "lp_burn_pct" in mo else None,  # type: ignore
         )
         if not is_lp_safe:

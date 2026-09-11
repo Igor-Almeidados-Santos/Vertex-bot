@@ -3,14 +3,11 @@ Teste de Integração Ponta a Ponta:
 Detecção -> Auditoria Hard Gates -> Paper Buy -> Break-Even -> Trailing Stop -> DB.
 """
 
-import asyncio
-import os
 from decimal import Decimal
-import pytest
+from pathlib import Path
 
 from src.database.connection import DatabaseManager
 from src.database.models import (
-    ExecutionMode,
     PositionStatus,
     TokenMetadata,
 )
@@ -21,10 +18,8 @@ from src.engine.tracker import PositionTracker
 from src.security.validator import SecurityValidator
 
 
-async def test_full_pipeline_mock():
-    db_path = "data/test_integration.db"
-    if os.path.exists(db_path):
-        os.remove(db_path)
+async def test_full_pipeline_mock(tmp_path: Path):
+    db_path = str(tmp_path / "test_integration.db")
 
     db = DatabaseManager(db_path)
     await db.initialize()
@@ -121,5 +116,3 @@ async def test_full_pipeline_mock():
 
     # Limpeza
     await db.close()
-    if os.path.exists(db_path):
-        os.remove(db_path)

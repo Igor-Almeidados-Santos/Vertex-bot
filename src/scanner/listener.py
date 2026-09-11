@@ -5,21 +5,20 @@ Monitora criação de pools e alimenta a fila de triagem com backoff de reconex�
 
 import asyncio
 import json
-from typing import Any, Optional
+from typing import Any
 
 try:
-    import websockets
+    from websockets.client import connect as ws_connect
     HAS_WEBSOCKETS = True
 except ImportError:
     HAS_WEBSOCKETS = False
 
 from src.database.models import TokenMetadata
 from src.scanner.parser import (
-    OnChainLogParser,
     PUMPFUN_PROGRAM_ID,
     RAYDIUM_AMM_V4_PROGRAM_ID,
+    OnChainLogParser,
 )
-from src.utils.exceptions import WebSocketStreamError
 from src.utils.logger import setup_logger
 
 logger = setup_logger("vertex.scanner.listener")
@@ -38,7 +37,7 @@ class WebSocketScanner:
         self.detection_queue: asyncio.Queue[TokenMetadata] = detection_queue
         self.reconnect_interval: float = reconnect_interval_seconds
         self.is_running: bool = False
-        self._task: Optional[asyncio.Task[None]] = None
+        self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Inicia a rotina assíncrona de escuta."""
@@ -65,7 +64,7 @@ class WebSocketScanner:
 
         while self.is_running:
             try:
-                async with websockets.connect(self.ws_url, ping_interval=20, ping_timeout=10) as ws:
+                async with ws_connect(self.ws_url, ping_interval=20, ping_timeout=10) as ws:
                     logger.info("Conexão WebSocket estabelecida com sucesso!")
                     await self._subscribe(ws)
 

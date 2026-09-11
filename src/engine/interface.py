@@ -5,7 +5,6 @@ Garante contrato idêntico para Paper Trading e Live Trading.
 
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Optional
 
 from src.database.models import ExecutionMode, OrderExecution, PositionState, TokenMetadata
 
@@ -24,7 +23,7 @@ class IExecutionEngine(ABC):
         self,
         token: TokenMetadata,
         amount_usd: Decimal,
-    ) -> Optional[PositionState]:
+    ) -> PositionState | None:
         """Executa ordem de compra e inicializa o estado da posição aberta."""
         pass
 
@@ -35,6 +34,6 @@ class IExecutionEngine(ABC):
         amount_tokens: Decimal,
         reason: str,
         execution_price: Decimal,
-    ) -> Optional[OrderExecution]:
+    ) -> OrderExecution | None:
         """Executa ordem de venda parcial ou total de uma posição aberta."""
         pass

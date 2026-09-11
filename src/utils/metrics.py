@@ -4,7 +4,7 @@ Módulo de Telemetria e Coleta de Métricas Locais (Fase de Homologação).
 
 from collections import Counter
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any
 
 from src.utils.logger import setup_logger
 
@@ -57,7 +57,7 @@ class TelemetryCollector:
         elif reason == "EMERGENCY_STOP":
             self.emergency_stops_hit += 1
 
-    def generate_report(self) -> Dict[str, Any]:
+    def generate_report(self) -> dict[str, Any]:
         """Gera dicionário analítico com as principais métricas quantitativas."""
         total_closed = self.winning_trades + self.losing_trades
         win_rate = (

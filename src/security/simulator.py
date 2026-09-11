@@ -2,7 +2,6 @@
 Simulador de Swap On-Chain (Honeypot e Detecção de Taxas Ocultas).
 """
 
-from typing import Any, Optional, Tuple
 
 from src.scanner.client import ResilientRPCClient
 from src.utils.logger import setup_logger
@@ -16,9 +15,9 @@ class TransactionSimulator:
     @staticmethod
     async def simulate_swap(
         token_address: str,
-        rpc_client: Optional[ResilientRPCClient] = None,
-        mock_taxes: Optional[Tuple[float, float, bool]] = None,
-    ) -> Tuple[bool, float, float]:
+        rpc_client: ResilientRPCClient | None = None,
+        mock_taxes: tuple[float, float, bool] | None = None,
+    ) -> tuple[bool, float, float]:
         """
         Executa simulação de compra e venda.
         Retorna (is_honeypot: bool, buy_tax_pct: float, sell_tax_pct: float).

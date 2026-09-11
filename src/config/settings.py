@@ -4,27 +4,17 @@ Configurações Globais do Vertex-bot com suporte a Pydantic v2 e fallback nativ
 
 import os
 from decimal import Decimal
-from typing import Literal, Optional
+from typing import Literal
 
-# Tenta carregar Pydantic Settings se disponível; caso contrário, provê implementação pura
-try:
-    from pydantic import Field
-    from pydantic_settings import BaseSettings, SettingsConfigDict
-
-    class _Base(BaseSettings):
-        model_config = SettingsConfigDict(
-            env_file=".env",
-            env_file_encoding="utf-8",
-            extra="ignore",
-        )
-except ImportError:
-    class _Base:  # type: ignore
-        def __init__(self, **kwargs: object) -> None:
-            for k, v in kwargs.items():
-                setattr(self, k, v)
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(_Base):  # type: ignore
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
     # === MODO DE OPERAÇÃO ===
     EXECUTION_MODE: Literal["PAPER", "LIVE"] = "PAPER"
     CONFIRM_LIVE_TRADING: bool = False
@@ -38,11 +28,11 @@ class Settings(_Base):  # type: ignore
     # === AGREGADORES E ROTEAMENTO (JUPITER / JITO) ===
     JUPITER_QUOTE_API_URL: str = "https://quote-api.jup.ag/v6/quote"
     JUPITER_SWAP_API_URL: str = "https://quote-api.jup.ag/v6/swap"
-    HELIUS_API_KEY: Optional[str] = None
+    HELIUS_API_KEY: str | None = None
 
     # === NÓS RPC & WEBSOCKETS (SOLANA FALLBACK) ===
     PRIMARY_RPC_HTTP_URL: str = "https://api.mainnet-beta.solana.com"
-    SECONDARY_RPC_HTTP_URL: Optional[str] = None
+    SECONDARY_RPC_HTTP_URL: str | None = None
     PRIMARY_RPC_WS_URL: str = "wss://api.mainnet-beta.solana.com"
 
     # === BANCO DE DADOS ===
@@ -66,7 +56,7 @@ class Settings(_Base):  # type: ignore
     MAX_DAILY_DRAWDOWN_PCT: Decimal = Decimal("8.0")
 
     # === LIVE TRADING ===
-    WALLET_PRIVATE_KEY_BASE58: Optional[str] = None
+    WALLET_PRIVATE_KEY_BASE58: str | None = None
 
 
 def load_env_file(filepath: str = ".env") -> dict[str, str]:
@@ -75,7 +65,7 @@ def load_env_file(filepath: str = ".env") -> dict[str, str]:
     if not os.path.exists(filepath):
         return values
 
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -91,7 +81,7 @@ def get_settings(env_path: str = ".env") -> Settings:
     env_vars = load_env_file(env_path)
     settings = Settings()
 
-    # Aplica variáveis encontradas
+    # Aplica variáveis encontradas no .env
     for k, v in env_vars.items():
         if hasattr(settings, k):
             current_val = getattr(settings, k)
@@ -103,5 +93,15 @@ def get_settings(env_path: str = ".env") -> Settings:
                 setattr(settings, k, Decimal(v))
             else:
                 setattr(settings, k, v)
+
+    # Se HELIUS_API_KEY foi definida e os endpoints ainda apontam para o RPC público default,
+    # monta automaticamente as URLs de alta velocidade da Helius:
+    if settings.HELIUS_API_KEY:
+        key = str(settings.HELIUS_API_KEY).strip()
+        if key:
+            if "api.mainnet-beta.solana.com" in settings.PRIMARY_RPC_HTTP_URL:
+                settings.PRIMARY_RPC_HTTP_URL = f"https://mainnet.helius-rpc.com/?api-key={key}"
+            if "api.mainnet-beta.solana.com" in settings.PRIMARY_RPC_WS_URL:
+                settings.PRIMARY_RPC_WS_URL = f"wss://mainnet.helius-rpc.com/?api-key={key}"
 
     return settings

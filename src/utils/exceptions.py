@@ -3,13 +3,13 @@ Hierarquia de Exceções de Domínio do Vertex-bot.
 Todos os erros específicos do sistema herdam de VertexError.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class VertexError(Exception):
     """Exceção base para todas as falhas de domínio do Vertex-bot."""
 
-    def __init__(self, message: str, context: Optional[dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, context: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.message: str = message
         self.context: dict[str, Any] = context or {}

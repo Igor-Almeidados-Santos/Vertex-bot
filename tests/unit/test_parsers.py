@@ -3,12 +3,11 @@ Testes Unitários para Parsers de Logs On-Chain (Raydium e Pump.fun).
 """
 
 from decimal import Decimal
-import pytest
 
 from src.scanner.parser import (
-    OnChainLogParser,
     PUMPFUN_PROGRAM_ID,
     RAYDIUM_AMM_V4_PROGRAM_ID,
+    OnChainLogParser,
 )
 
 
