@@ -1,0 +1,8 @@
+{
+  "command": "restart",
+  "command_id": "16b766ec-6359-4712-b0ee-ab272cc369bc",
+  "payload": {
+    "wallet_balance_usd": 10.0
+  },
+  "timestamp": 1789247170.454871
+}

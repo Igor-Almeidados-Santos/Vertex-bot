@@ -75,6 +75,11 @@ class IndexedFeedScanner:
             self._session = None
         logger.info("Scanner de Feeds Indexados finalizado.")
 
+    def release_token(self, token_addr: str) -> None:
+        """Remove o token do cache de vistos para permitir nova captura."""
+        self._seen_addresses.discard(token_addr)
+        logger.info("🔄 [TOKEN LIBERADO PARA REANÁLISE] Endereço %s removido de IndexedFeedScanner.", token_addr)
+
     async def _poll_loop(self) -> None:
         """Loop contínuo de polling com proteção contra falhas e reconexão."""
         while self.is_running:

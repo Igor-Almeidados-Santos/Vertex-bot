@@ -5,6 +5,7 @@ Monitora criação de pools e alimenta a fila de triagem com backoff de reconex�
 
 import asyncio
 import json
+from decimal import Decimal
 from typing import Any
 
 try:
@@ -122,9 +123,72 @@ def create_scanner(
     detection_queue: asyncio.Queue[TokenMetadata],
 ) -> Any:
     """Factory que instancia o scanner apropriado com base no provedor configurado."""
-    from src.scanner.indexed_feed import IndexedFeedScanner
+    provider = getattr(settings, "SCANNER_PROVIDER", "HYBRID")
 
-    if getattr(settings, "SCANNER_PROVIDER", "INDEXED") == "INDEXED":
+    if provider == "HYBRID":
+        from src.scanner.composite_scanner import CompositeScanner
+        from src.scanner.graduation_scanner import RaydiumGraduationScanner
+        from src.scanner.mature_scanner import MatureTokenScanner
+
+        logger.info(
+            "⚡ [MODO HÍBRIDO ATIVADO] Instanciando MatureTokenScanner (%.2fh a %.1fh) + RaydiumGraduationScanner em paralelo.",
+            float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.25)),
+            float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0)),
+        )
+        mature_scanner = MatureTokenScanner(
+            detection_queue=detection_queue,
+            min_age_hours=float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.25)),
+            max_age_hours=float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0)),
+            poll_interval_seconds=float(getattr(settings, "MATURE_POOLS_POLL_INTERVAL_SEC", 5.0)),
+            dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
+            geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
+            enable_established_pools=bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", True)),
+        )
+        graduation_scanner = RaydiumGraduationScanner(
+            detection_queue=detection_queue,
+            ws_url=getattr(settings, "GRADUATION_WS_URL", getattr(settings, "PUMPPORTAL_WS_URL", "wss://pumpportal.fun/api/data")),
+            sol_price_usd=getattr(settings, "ESTIMATED_SOL_PRICE_USD", Decimal("150.0")),
+        )
+        return CompositeScanner([mature_scanner, graduation_scanner])
+
+    elif provider == "GRADUATIONS":
+        from src.scanner.graduation_scanner import RaydiumGraduationScanner
+
+        logger.info("Instanciando provedor de scanner de GRADUAÇÕES RAYDIUM (WebSocket em Tempo Real).")
+        return RaydiumGraduationScanner(
+            detection_queue=detection_queue,
+            ws_url=getattr(settings, "GRADUATION_WS_URL", getattr(settings, "PUMPPORTAL_WS_URL", "wss://pumpportal.fun/api/data")),
+            sol_price_usd=getattr(settings, "ESTIMATED_SOL_PRICE_USD", Decimal("150.0")),
+        )
+
+    elif provider == "MATURE_POOLS":
+        from src.scanner.mature_scanner import MatureTokenScanner
+
+        logger.info(
+            "Instanciando provedor de scanner de TOKENS MADUROS/CONSOLIDADOS (Janela de %.2fh a %.1fh).",
+            float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.25)),
+            float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0)),
+        )
+        return MatureTokenScanner(
+            detection_queue=detection_queue,
+            min_age_hours=float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.25)),
+            max_age_hours=float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0)),
+            poll_interval_seconds=float(getattr(settings, "MATURE_POOLS_POLL_INTERVAL_SEC", 5.0)),
+            dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
+            geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
+            enable_established_pools=bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", True)),
+        )
+    elif provider == "PUMPPORTAL":
+        from src.scanner.pumpportal import PumpPortalScanner
+
+        logger.info("Instanciando provedor de scanner STREAMING EM TEMPO REAL (PumpPortal WebSocket).")
+        return PumpPortalScanner(
+            detection_queue=detection_queue,
+            ws_url=getattr(settings, "PUMPPORTAL_WS_URL", "wss://pumpportal.fun/api/data"),
+        )
+    elif provider == "INDEXED":
+        from src.scanner.indexed_feed import IndexedFeedScanner
+
         logger.info("Instanciando provedor de scanner INDEXADO (Photon/DexScreener).")
         return IndexedFeedScanner(
             detection_queue=detection_queue,

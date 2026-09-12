@@ -1,0 +1,50 @@
+"""
+Orquestrador Composto de Múltiplos Scanners Concorrentes (CompositeScanner).
+Permite executar simultaneamente diferentes provedores de detecção (ex: Tokens Maduros + Graduações Raydium)
+alimentando concorrentemente a mesma fila assíncrona de triagem de segurança com isolamento de falhas.
+"""
+
+import asyncio
+from typing import Any
+
+from src.utils.logger import setup_logger
+
+logger = setup_logger("vertex.scanner.composite")
+
+
+class CompositeScanner:
+    """Supervisiona e executa múltiplos scanners em paralelo de forma transparente."""
+
+    def __init__(self, scanners: list[Any]) -> None:
+        self.scanners: list[Any] = scanners
+        self.is_running: bool = False
+
+    async def start(self) -> None:
+        """Inicia todos os sub-scanners concorrentemente."""
+        self.is_running = True
+        logger.info(
+            "Iniciando CompositeScanner com %d motores de varredura ativos em paralelo...",
+            len(self.scanners),
+        )
+        tasks = [s.start() for s in self.scanners if hasattr(s, "start")]
+        if tasks:
+            await asyncio.gather(*tasks)
+        logger.info("CompositeScanner totalmente operacional.")
+
+    async def stop(self) -> None:
+        """Finaliza todos os sub-scanners de maneira coordenada."""
+        self.is_running = False
+        logger.info("Encerrando CompositeScanner e seus sub-scanners...")
+        tasks = [s.stop() for s in self.scanners if hasattr(s, "stop")]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info("CompositeScanner finalizado.")
+
+    def release_token(self, token_addr: str) -> None:
+        """Propaga a liberação do token para todos os sub-scanners."""
+        for s in self.scanners:
+            if hasattr(s, "release_token"):
+                try:
+                    s.release_token(token_addr)
+                except Exception as exc:
+                    logger.debug("Erro ao liberar token no sub-scanner %s: %s", type(s).__name__, exc)

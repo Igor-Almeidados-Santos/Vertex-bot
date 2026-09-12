@@ -21,7 +21,17 @@ class Settings(BaseSettings):
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     # === PROVEDOR DE INGESTÃO (SCANNER) ===
-    SCANNER_PROVIDER: Literal["INDEXED", "RAW_RPC"] = "INDEXED"
+    SCANNER_PROVIDER: Literal["MATURE_POOLS", "INDEXED", "RAW_RPC", "PUMPPORTAL", "HYBRID", "GRADUATIONS"] = "HYBRID"
+    MIN_TOKEN_AGE_HOURS: float = 0.25  # 15 minutos de existência
+    MAX_TOKEN_AGE_HOURS: float = 720.0  # Até 30 dias (1 mês) de existência
+    ENABLE_ESTABLISHED_POOLS: bool = True  # Coleta pools consolidadas e trending (1d a 1 mês)
+    MATURE_POOLS_POLL_INTERVAL_SEC: float = 5.0
+    WATCHLIST_POLL_INTERVAL_SEC: float = 25.0  # Intervalo de verificação de reentrada na watchlist
+    WATCHLIST_RETRY_COOLDOWN_SEC: float = 60.0  # Cooldown por token na watchlist
+    GECKOTERMINAL_API_BASE_URL: str = "https://api.geckoterminal.com"
+    PUMPPORTAL_WS_URL: str = "wss://pumpportal.fun/api/data"
+    GRADUATION_WS_URL: str = "wss://pumpportal.fun/api/data"
+    ESTIMATED_SOL_PRICE_USD: Decimal = Decimal("150.0")
     DEXSCREENER_API_BASE_URL: str = "https://api.dexscreener.com"
     DEXSCREENER_POLL_INTERVAL_SEC: float = 2.0
 
@@ -40,12 +50,12 @@ class Settings(BaseSettings):
 
     # === PAPER TRADING DEFAULTS ===
     PAPER_INITIAL_WALLET_USD: Decimal = Decimal("5.0")
-    MAX_CONCURRENT_POSITIONS: int = 2
+    MAX_CONCURRENT_POSITIONS: int = 5
     MIN_TRADE_AMOUNT_USD: Decimal = Decimal("1.0")
     PAPER_INITIAL_BALANCE_SOL: Decimal = Decimal("10.0")
     PAPER_SIMULATED_LATENCY_MS: int = 250
     PAPER_DEFAULT_BUY_AMOUNT_SOL: Decimal = Decimal("0.1")
-    PAPER_BUY_AMOUNT_USD: Decimal = Decimal("2.5")
+    PAPER_BUY_AMOUNT_USD: Decimal = Decimal("1.0")
     PRICE_POLL_INTERVAL_SEC: float = 3.0
 
     # === PARÂMETROS DE RISCO E MITIGAÇÃO ===
@@ -59,6 +69,23 @@ class Settings(BaseSettings):
     TRAILING_STOP_DROP_PCT: Decimal = Decimal("12.0")
     EMERGENCY_STOP_LOSS_PCT: Decimal = Decimal("20.0")
     MAX_DAILY_DRAWDOWN_PCT: Decimal = Decimal("8.0")
+
+    # === PARÂMETROS DE REENTRADA INTELIGENTE (ANTI-FALLING-KNIFE) ===
+    REENTRY_TRAILING_COOLOFF_SEC: float = 300.0  # 5 minutos após trailing stop
+    REENTRY_STOPLOSS_COOLOFF_SEC: float = 1800.0  # 30 minutos após stop loss
+    REENTRY_MIN_BOUNCE_PCT: Decimal = Decimal("3.0")  # Repique de 3% a partir do fundo
+    REENTRY_MAX_DROP_PCT: Decimal = Decimal("25.0")  # Queda máxima pós-saída sem repique
+
+    # === ESTRATÉGIAS DUAL-TRACK (SCALP + SWING RATCHET) ===
+    TRADING_STRATEGY_MODE: Literal["DUAL", "SCALP_ONLY", "SWING_ONLY"] = "DUAL"
+    SWING_INITIAL_STOP_LOSS_PCT: Decimal = Decimal("20.0")
+    SWING_TIER1_TARGET_MULT: Decimal = Decimal("2.0")  # 2x: Piso sobe para Entrada ($x)
+    SWING_TIER2_TARGET_MULT: Decimal = Decimal("3.0")  # 3x: Piso sobe para Degrau 1 ($y / +100% travado)
+    SWING_TIER3_TARGET_MULT: Decimal = Decimal("5.0")  # 5x: Piso sobe para Degrau 2 ($z / +200% travado)
+    SWING_TIER4_TARGET_MULT: Decimal = Decimal("10.0") # 10x: Piso sobe para Degrau 3 (+400% travado)
+    SWING_TRAILING_DROP_PCT: Decimal = Decimal("25.0") # Trailing stop elástico (-25%)
+    MAX_SCALP_POSITIONS: int = 3
+    MAX_SWING_POSITIONS: int = 3
 
     # === LIVE TRADING ===
     WALLET_PRIVATE_KEY_BASE58: str | None = None

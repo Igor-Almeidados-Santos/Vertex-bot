@@ -1,0 +1,20 @@
+{
+  "paper_buy_amount_usd": 0.2,
+  "max_concurrent_positions": 10,
+  "wallet_balance_usd": 10.0,
+  "min_trade_amount_usd": 0.1,
+  "break_even_gain_pct": 100.0,
+  "trailing_stop_drop_pct": 40.0,
+  "emergency_stop_loss_pct": 50.0,
+  "max_slippage_pct": 1.5,
+  "reentry_trailing_cooloff_min": 5.0,
+  "reentry_stoploss_cooloff_min": 30.0,
+  "reentry_min_bounce_pct": 3.0,
+  "trading_strategy_mode": "DUAL",
+  "swing_initial_stop_loss_pct": 20.0,
+  "swing_tier1_mult": 2.0,
+  "swing_tier2_mult": 3.0,
+  "swing_tier3_mult": 5.0,
+  "swing_tier4_mult": 10.0,
+  "swing_trailing_drop_pct": 25.0
+}

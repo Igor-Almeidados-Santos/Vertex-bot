@@ -65,6 +65,70 @@ async def test_price_feed_parsing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_price_feed_caches_and_updates_token_metadata(tmp_path: Any) -> None:
+    """Verifica se o price feed armazena symbol/name e enriquece tokens_catalogados."""
+    feed = DexScreenerPriceFeed()
+    mock_payload = {
+        "pairs": [
+            {
+                "baseToken": {
+                    "address": "TokenMeta111111111111111111111111111111111",
+                    "symbol": "META",
+                    "name": "Metadata Token",
+                },
+                "priceUsd": "0.050",
+            },
+        ]
+    }
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value=mock_payload)
+
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_resp
+    mock_cm.__aexit__.return_value = None
+
+    mock_session = AsyncMock()
+    mock_session.closed = False
+    mock_session.get = MagicMock(return_value=mock_cm)
+    feed._session = mock_session
+
+    token_addr = "TokenMeta111111111111111111111111111111111"
+    prices = await feed.fetch_prices([token_addr])
+    assert prices[token_addr] == Decimal("0.050")
+
+    meta = feed.get_metadata(token_addr)
+    assert meta == ("META", "Metadata Token")
+    await feed.close()
+
+    # Testa atualização no banco via TokensRepository
+    db = DatabaseManager(str(tmp_path / "meta_test.db"))
+    await db.initialize()
+    repo = TokensRepository(db)
+
+    await repo.save_detected_token(
+        TokenMetadata(
+            address=token_addr,
+            symbol=None,
+            name=None,
+            initial_liquidity_usd=Decimal("6000.0"),
+        )
+    )
+
+    t_before = await repo.get_by_address(token_addr)
+    assert t_before is not None
+    assert t_before["symbol"] is None
+
+    await repo.update_token_metadata(token_addr, symbol="META", name="Metadata Token")
+    t_after = await repo.get_by_address(token_addr)
+    assert t_after is not None
+    assert t_after["symbol"] == "META"
+    assert t_after["name"] == "Metadata Token"
+    await db.close()
+
+
+
+@pytest.mark.asyncio
 async def test_live_price_tick_triggers_break_even_and_trailing_stop(tmp_path: Any) -> None:
     """Valida ciclo completo: tick dobra preço (+100%) -> Break Even -> tick recua 15% -> Trailing Stop."""
     db_path = str(tmp_path / "test_tracker.db")

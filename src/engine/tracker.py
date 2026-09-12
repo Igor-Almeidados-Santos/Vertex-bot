@@ -2,6 +2,7 @@
 Rastreador Assíncrono do Ciclo de Vida das Posições (Finite State Machine).
 """
 
+from collections.abc import Awaitable, Callable
 from decimal import Decimal
 
 from src.database.models import PositionState, PositionStatus
@@ -21,10 +22,12 @@ class PositionTracker:
         engine: IExecutionEngine,
         positions_repo: PositionsRepository,
         risk_manager: RiskManager,
+        on_position_closed: Callable[[PositionState], Awaitable[None]] | None = None,
     ) -> None:
         self.engine: IExecutionEngine = engine
         self.positions_repo: PositionsRepository = positions_repo
         self.risk_manager: RiskManager = risk_manager
+        self.on_position_closed: Callable[[PositionState], Awaitable[None]] | None = on_position_closed
         self.active_positions: dict[int, PositionState] = {}
         self.is_running: bool = False
 
@@ -42,11 +45,13 @@ class PositionTracker:
 
         decision = self.risk_manager.evaluate_price_tick(position, current_price)
         if not decision:
-            # Apenas atualiza a máxima e linha de stop no banco
+            # Apenas atualiza a máxima, linha de stop e degraus de ratchet no banco
             await self.positions_repo.update_tracking(
                 position_id,
                 position.highest_price_seen,
                 position.trailing_stop_price,
+                ratchet_tier=position.ratchet_tier,
+                ratchet_floor_price=position.ratchet_floor_price,
             )
             return
 
@@ -78,10 +83,21 @@ class PositionTracker:
                 position_id,
                 position.highest_price_seen,
                 position.trailing_stop_price,
+                ratchet_tier=position.ratchet_tier,
+                ratchet_floor_price=position.ratchet_floor_price,
             )
 
-        elif action in ("TRAILING_STOP", "EMERGENCY_STOP"):
-            if action == "TRAILING_STOP":
+        elif action in ("TRAILING_STOP", "EMERGENCY_STOP", "SWING_RATCHET_STOP"):
+            if action == "SWING_RATCHET_STOP":
+                logger.info(
+                    "🌊 [SWING RATCHET STOP ATIVADO!] Posição #%d (%s) | Cotação recuou para o piso do Degrau #%d ($%.8f -> $%.8f) | Fechando posição com lucro travado!",
+                    position_id,
+                    position.token_address,
+                    position.ratchet_tier,
+                    position.highest_price_seen,
+                    current_price,
+                )
+            elif action == "TRAILING_STOP":
                 logger.info(
                     "🔴 [TRAILING STOP ATIVADO!] Posição #%d (%s) | Recuo de 12%% da máxima ($%.8f -> $%.8f) | Fechando posição!",
                     position_id,
@@ -107,7 +123,7 @@ class PositionTracker:
             # 2. Atualiza estado em memória
             position.close_position(current_price, reason=action)
             # 3. Persiste no SQLite
-            status = PositionStatus.CLOSED if action == "TRAILING_STOP" else PositionStatus.STOPPED
+            status = PositionStatus.CLOSED if action in ("TRAILING_STOP", "SWING_RATCHET_STOP") else PositionStatus.STOPPED
             await self.positions_repo.close_position(
                 position_id,
                 position.realized_pnl_usd,
@@ -116,3 +132,10 @@ class PositionTracker:
             # 4. Remove das posições ativas
             self.active_positions.pop(position_id, None)
             logger.info("Posição ID #%d encerrada com sucesso por %s | PnL Realizado: $%.2f.", position_id, action, position.realized_pnl_usd)
+
+            # 5. Notifica encerramento para liberar token para nova análise/reentrada
+            if self.on_position_closed is not None:
+                try:
+                    await self.on_position_closed(position)
+                except Exception as cb_err:
+                    logger.warning("Erro ao executar callback on_position_closed para %s: %s", position.token_address, cb_err)

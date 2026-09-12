@@ -130,12 +130,35 @@ async def test_dashboard_api_full_flow(tmp_path: Path) -> None:
         assert scanner["approved"] == 1
         assert scanner["rejected"] == 1
 
-        # 3. Testar GET /api/positions
+        # Inserir também uma posição aberta para testar filtros
+        pos_open = PositionState(
+            token_address=token_rej.address,
+            mode=ExecutionMode.PAPER,
+            entry_price=Decimal("0.5"),
+            initial_token_amount=Decimal("200.0"),
+            allocated_capital_usd=Decimal("100.0"),
+            status=PositionStatus.OPEN,
+        )
+        await positions_repo.create_position(pos_open)
+
+        # 3. Testar GET /api/positions (todas, abertas e fechadas)
         resp_pos = await client.get("/api/positions")
         assert resp_pos.status == 200
         pos_data = await resp_pos.json()
-        assert len(pos_data["data"]) == 1
-        assert pos_data["data"][0]["token_address"] == "TOKEN_APPR_111"
+        assert len(pos_data["data"]) == 2
+
+        resp_pos_open = await client.get("/api/positions?status=open")
+        assert resp_pos_open.status == 200
+        open_data = await resp_pos_open.json()
+        assert len(open_data["data"]) == 1
+        assert open_data["data"][0]["status"] == "OPEN"
+
+        resp_pos_closed = await client.get("/api/positions?status=closed")
+        assert resp_pos_closed.status == 200
+        closed_data = await resp_pos_closed.json()
+        assert len(closed_data["data"]) == 1
+        assert closed_data["data"][0]["status"] == "CLOSED"
+        assert closed_data["data"][0]["token_address"] == "TOKEN_APPR_111"
 
         # 4. Testar GET /api/orders
         resp_orders = await client.get("/api/orders")
@@ -159,6 +182,113 @@ async def test_dashboard_api_full_flow(tmp_path: Path) -> None:
         tokens_search = await resp_tokens_search.json()
         assert len(tokens_search["data"]) == 1
         assert tokens_search["data"][0]["symbol"] == "WIN"
+
+    finally:
+        await client.close()
+        await server.close()
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_session_filtering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Valida que o resumo do dashboard inicia zerado visualmente quando há uma nova sessão simulada."""
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    db_path = str(tmp_path / "test_session_dash.db")
+    db = DatabaseManager(db_path)
+    await db.initialize()
+
+    tokens_repo = TokensRepository(db)
+
+    # Inserir token auditado 1 hora atrás (sessão passada)
+    one_hour_ago = datetime.now(UTC) - timedelta(hours=1)
+    old_token = TokenMetadata(
+        address="OLD_TOKEN_001",
+        symbol="OLD",
+        name="Old Scam",
+        dex="raydium",
+        initial_liquidity_usd=Decimal("5000.0"),
+        detection_timestamp=one_hour_ago,
+    )
+    await tokens_repo.save_detected_token(old_token)
+    audit_old = SecurityAuditResult(
+        token_address=old_token.address,
+        status=SecurityStatus.REJECTED,
+        security_score=0.0,
+        is_mint_revoked=True,
+        is_freeze_revoked=True,
+        is_lp_burned_or_locked=False,
+        lp_burn_percentage=0.0,
+        top10_holder_percentage=20.0,
+        is_honeypot=False,
+        buy_tax_percentage=0.0,
+        sell_tax_percentage=0.0,
+        rejection_reason="LP não queimada",
+    )
+    await tokens_repo.update_audit_result(audit_old)
+
+    # Simula arquivo de sessão simulada iniciado há 5 minutos
+    session_start = datetime.now(UTC) - timedelta(minutes=5)
+    session_file = tmp_path / "paper_session.json"
+    session_file.write_text(json.dumps({
+        "session_start": session_start.isoformat(),
+        "mode": "PAPER",
+    }))
+
+    app = create_dashboard_app(db)
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+
+    # Monkeypatch do caminho do paper_session.json no server
+    server_instance = [h for h in app.router.routes() if h.method == "GET"][0].handler.__self__  # type: ignore[attr-defined]
+    monkeypatch.setattr(server_instance, "_get_session_start", lambda: session_start)
+
+    try:
+        # GET /api/summary deve mostrar 0 tokens na sessão ativa, mas 1 no banco geral
+        resp = await client.get("/api/summary")
+        assert resp.status == 200
+        data = await resp.json()
+        scanner = data["data"]["scanner"]
+        assert scanner["total_scanned"] == 0
+        assert scanner["approved"] == 0
+        assert scanner["rejected"] == 0
+        assert scanner["all_time_cataloged"] == 1
+
+        # Agora adiciona um token novo detectado AGORA (nesta sessão)
+        new_token = TokenMetadata(
+            address="NEW_TOKEN_002",
+            symbol="NEW",
+            name="New Project",
+            dex="raydium",
+            initial_liquidity_usd=Decimal("25000.0"),
+            detection_timestamp=datetime.now(UTC),
+        )
+        await tokens_repo.save_detected_token(new_token)
+        audit_new = SecurityAuditResult(
+            token_address=new_token.address,
+            status=SecurityStatus.APPROVED,
+            security_score=100.0,
+            is_mint_revoked=True,
+            is_freeze_revoked=True,
+            is_lp_burned_or_locked=True,
+            lp_burn_percentage=100.0,
+            top10_holder_percentage=10.0,
+            is_honeypot=False,
+            buy_tax_percentage=0.0,
+            sell_tax_percentage=0.0,
+        )
+        await tokens_repo.update_audit_result(audit_new)
+
+        # Agora o dashboard deve mostrar 1 token nesta sessão (e 2 no total do banco)
+        resp2 = await client.get("/api/summary")
+        data2 = await resp2.json()
+        scanner2 = data2["data"]["scanner"]
+        assert scanner2["total_scanned"] == 1
+        assert scanner2["approved"] == 1
+        assert scanner2["rejected"] == 0
+        assert scanner2["all_time_cataloged"] == 2
 
     finally:
         await client.close()

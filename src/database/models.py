@@ -136,6 +136,9 @@ class PositionState(BaseModel):
     initial_token_amount: Decimal
     allocated_capital_usd: Decimal
     trailing_drop_pct: Decimal = Decimal("0.12")
+    strategy_type: str = "SCALP"
+    ratchet_tier: int = 0
+    ratchet_floor_price: Decimal = Decimal("0.0")
     id: int | None = None
     status: PositionStatus = PositionStatus.OPEN
     remaining_token_amount: Decimal = Decimal("0.0")
@@ -150,21 +153,43 @@ class PositionState(BaseModel):
     @classmethod
     def _set_dynamic_defaults(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            init_amount = data.get("initial_token_amount")
-            if (data.get("remaining_token_amount") is None or "remaining_token_amount" not in data) and init_amount is not None:
-                data["remaining_token_amount"] = init_amount
-            entry = data.get("entry_price")
-            if (data.get("highest_price_seen") is None or "highest_price_seen" not in data) and entry is not None:
-                data["highest_price_seen"] = entry
-            drop = data.get("trailing_drop_pct", Decimal("0.12"))
-            if isinstance(drop, (int, float, str)):
-                drop = Decimal(str(drop))
-            if (data.get("trailing_stop_price") is None or "trailing_stop_price" not in data) and entry is not None:
-                entry_dec = Decimal(str(entry)) if not isinstance(entry, Decimal) else entry
-                data["trailing_stop_price"] = entry_dec * (Decimal("1.0") - drop)
-            if "opened_at" in data and data["opened_at"] is None:
-                data["opened_at"] = datetime.now(UTC)
+            cls._apply_position_defaults(data)
         return data
+
+    @classmethod
+    def _apply_position_defaults(cls, data: dict[str, Any]) -> None:
+        init_amount = data.get("initial_token_amount")
+        if data.get("remaining_token_amount") is None and init_amount is not None:
+            data["remaining_token_amount"] = init_amount
+
+        entry = data.get("entry_price")
+        if data.get("highest_price_seen") is None and entry is not None:
+            data["highest_price_seen"] = entry
+
+        if data.get("trailing_stop_price") is None and entry is not None:
+            drop = Decimal(str(data.get("trailing_drop_pct", "0.12")))
+            entry_dec = Decimal(str(entry))
+            data["trailing_stop_price"] = entry_dec * (Decimal("1.0") - drop)
+
+        data.setdefault("strategy_type", "SCALP")
+        data.setdefault("ratchet_tier", 0)
+        floor = data.setdefault("ratchet_floor_price", Decimal("0.0"))
+        if not isinstance(floor, Decimal):
+            data["ratchet_floor_price"] = Decimal(str(floor))
+
+        if data.get("opened_at") is None:
+            data["opened_at"] = datetime.now(UTC)
+
+    def promote_ratchet_tier(self, new_tier: int, new_floor_price: Decimal) -> bool:
+        """Promove o degrau da catraca e eleva o piso protegido monotonicamente."""
+        promoted = False
+        if new_tier > self.ratchet_tier:
+            self.ratchet_tier = new_tier
+            promoted = True
+        if new_floor_price > self.ratchet_floor_price:
+            self.ratchet_floor_price = new_floor_price
+            promoted = True
+        return promoted
 
     def update_price_and_trailing_stop(self, current_price: Decimal) -> None:
         """Atualiza a máxima histórica registrada e eleva o trailing stop dinâmico."""

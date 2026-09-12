@@ -27,6 +27,7 @@ class DexScreenerPriceFeed:
     def __init__(self, base_url: str = "https://api.dexscreener.com") -> None:
         self.base_url: str = base_url.rstrip("/")
         self._session: Any | None = None
+        self._metadata_cache: dict[str, tuple[str | None, str | None]] = {}
 
     async def _get_session(self) -> Any:
         if HAS_AIOHTTP:
@@ -56,8 +57,28 @@ class DexScreenerPriceFeed:
                 return res
             return {}
 
+    def get_metadata(self, address: str) -> tuple[str | None, str | None] | None:
+        """Retorna tupla (symbol, name) do cache para o endereço informado se disponível."""
+        return self._metadata_cache.get(address)
+
+    def _parse_pair_item(self, pair: dict[str, Any], prices: dict[str, Decimal]) -> None:
+        """Extrai cotação e metadados de um par retornado pela DexScreener."""
+        base_token = pair.get("baseToken", {})
+        token_addr = str(base_token.get("address", ""))
+        raw_price = pair.get("priceUsd")
+        sym = base_token.get("symbol")
+        nm = base_token.get("name")
+        if token_addr and (sym or nm):
+            self._metadata_cache[token_addr] = (sym, nm)
+
+        if token_addr and raw_price and token_addr not in prices:
+            try:
+                prices[token_addr] = Decimal(str(raw_price))
+            except Exception as parse_err:
+                logger.debug("Preço inválido para %s: %s", token_addr, parse_err)
+
     async def fetch_prices(self, addresses: list[str]) -> dict[str, Decimal]:
-        """Obtém cotações em USD para uma lista de endereços de tokens."""
+        """Obtém cotações em USD para uma lista de endereços de tokens e extrai metadados."""
         if not addresses:
             return {}
 
@@ -80,16 +101,11 @@ class DexScreenerPriceFeed:
                 pairs = payload.get("pairs", [])
                 if isinstance(pairs, list):
                     for pair in pairs:
-                        base_token = pair.get("baseToken", {})
-                        token_addr = str(base_token.get("address", ""))
-                        raw_price = pair.get("priceUsd")
-                        if token_addr and raw_price and token_addr not in prices:
-                            try:
-                                prices[token_addr] = Decimal(str(raw_price))
-                            except Exception as parse_err:
-                                logger.debug("Preço inválido para %s: %s", token_addr, parse_err)
+                        if isinstance(pair, dict):
+                            self._parse_pair_item(pair, prices)
             except Exception as exc:
                 logger.debug("Erro ao consultar cotações de lote: %s", exc)
 
         return prices
+
 

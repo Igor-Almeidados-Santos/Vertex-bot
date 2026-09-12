@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS posicoes (
     token_address TEXT NOT NULL,
     status TEXT NOT NULL,
     mode TEXT NOT NULL,
+    strategy_type TEXT NOT NULL DEFAULT 'SCALP',
     entry_price REAL NOT NULL,
     initial_token_amount REAL NOT NULL,
     remaining_token_amount REAL NOT NULL,
@@ -54,6 +55,8 @@ CREATE TABLE IF NOT EXISTS posicoes (
     highest_price_seen REAL NOT NULL,
     break_even_triggered INTEGER DEFAULT 0,
     trailing_stop_price REAL NOT NULL,
+    ratchet_tier INTEGER DEFAULT 0,
+    ratchet_floor_price REAL DEFAULT 0.0,
     opened_at TIMESTAMP NOT NULL,
     closed_at TIMESTAMP,
     FOREIGN KEY (token_address) REFERENCES tokens_catalogados(address) ON DELETE RESTRICT
@@ -108,17 +111,33 @@ class DatabaseManager:
 
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
+            migrations = [
+                "ALTER TABLE posicoes ADD COLUMN strategy_type TEXT DEFAULT 'SCALP'",
+                "ALTER TABLE posicoes ADD COLUMN ratchet_tier INTEGER DEFAULT 0",
+                "ALTER TABLE posicoes ADD COLUMN ratchet_floor_price REAL DEFAULT 0.0",
+            ]
+
             try:
                 if HAS_AIOSQLITE:
                     self._aiosqlite_conn = await aiosqlite.connect(self.db_path, timeout=5.0)
                     self._aiosqlite_conn.row_factory = aiosqlite.Row
                     await self._aiosqlite_conn.executescript(INITIAL_DDL)
+                    for mig in migrations:
+                        try:
+                            await self._aiosqlite_conn.execute(mig)
+                        except Exception:
+                            pass
                     await self._aiosqlite_conn.commit()
                 else:
                     def _init_sync() -> sqlite3.Connection:
                         conn = sqlite3.connect(self.db_path, timeout=5.0, check_same_thread=False)
                         conn.row_factory = sqlite3.Row
                         conn.executescript(INITIAL_DDL)
+                        for mig in migrations:
+                            try:
+                                conn.execute(mig)
+                            except Exception:
+                                pass
                         conn.commit()
                         return conn
 

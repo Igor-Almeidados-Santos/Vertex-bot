@@ -23,6 +23,7 @@ class IExecutionEngine(ABC):
         self,
         token: TokenMetadata,
         amount_usd: Decimal,
+        strategy_type: str = "SCALP",
     ) -> PositionState | None:
         """Executa ordem de compra e inicializa o estado da posição aberta."""
         pass

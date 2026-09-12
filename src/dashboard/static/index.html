@@ -36,55 +36,226 @@
     .glow-green { box-shadow: 0 0 15px rgba(16, 185, 129, 0.2); }
   </style>
 </head>
-<body class="min-h-screen flex flex-col antialiased selection:bg-brand-500 selection:text-black">
+<body class="min-h-screen flex bg-dark-900 text-gray-100 antialiased selection:bg-brand-500 selection:text-black">
 
-  <!-- TOP HEADER -->
-  <header class="border-b border-dark-700 bg-dark-800/80 backdrop-blur sticky top-0 z-50">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-      <div class="flex items-center space-x-4">
-        <div class="flex items-center space-x-2">
-          <span class="h-3 w-3 rounded-full bg-brand-500 animate-pulse"></span>
-          <span class="font-bold text-lg tracking-wider text-white">VERTEX<span class="text-brand-500">.BOT</span></span>
+  <!-- MOBILE SIDEBAR BACKDROP -->
+  <div id="sidebar-backdrop" onclick="toggleMobileSidebar()" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 hidden md:hidden"></div>
+
+  <!-- SIDEBAR NAVIGATION (ESQUERDA) -->
+  <aside id="sidebar" class="fixed md:sticky top-0 inset-y-0 left-0 z-40 w-64 bg-dark-800 border-r border-dark-700 flex flex-col h-screen transform -translate-x-full md:translate-x-0 transition-transform duration-200 ease-in-out shrink-0">
+    <!-- Brand Header -->
+    <div class="h-16 px-5 border-b border-dark-700 flex items-center justify-between">
+      <div class="flex items-center space-x-2.5">
+        <span class="h-3 w-3 rounded-full bg-brand-500 animate-pulse glow-green"></span>
+        <div class="flex flex-col">
+          <span class="font-bold text-base tracking-wider text-white">VERTEX<span class="text-brand-500">.BOT</span></span>
+          <span class="text-[9px] text-gray-400 font-mono tracking-widest uppercase">Trading Suite v1.2</span>
         </div>
-        <span class="px-2.5 py-0.5 rounded text-xs font-semibold bg-brand-900/60 text-brand-500 border border-brand-500/30">
-          PAPER TRADING
-        </span>
-        <span class="hidden md:inline-block px-2.5 py-0.5 rounded text-xs font-medium bg-dark-700 text-gray-300">
-          SQLite WAL Mode
-        </span>
       </div>
+      <button onclick="toggleMobileSidebar()" class="md:hidden p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-dark-700" title="Fechar menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
 
-      <div class="flex items-center space-x-4">
-        <!-- REFRESH CONTROLS -->
-        <div class="flex items-center bg-dark-900 rounded-lg p-1 border border-dark-700 text-xs">
-          <span class="text-gray-400 px-2">Atualização:</span>
-          <button onclick="setRefreshInterval(2000)" id="btn-ref-2" class="px-2 py-1 rounded bg-brand-600 text-white font-medium">2s</button>
-          <button onclick="setRefreshInterval(5000)" id="btn-ref-5" class="px-2 py-1 rounded text-gray-400 hover:text-white">5s</button>
-          <button onclick="setRefreshInterval(0)" id="btn-ref-0" class="px-2 py-1 rounded text-gray-400 hover:text-white">Pause</button>
+    <!-- Nav Items List -->
+    <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto custom-scrollbar text-xs font-medium font-sans">
+      <div class="px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-gray-500 font-mono">Trading & Execução</div>
+      
+      <!-- 1. Dashboard (Real) -->
+      <button onclick="switchSidebarNav('dashboard')" data-nav="dashboard" class="sidebar-nav-btn w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between border-l-2 border-transparent text-gray-400 hover:text-gray-200 hover:bg-dark-700/50 transition group">
+        <div class="flex items-center space-x-2.5">
+          <span class="text-base group-hover:scale-110 transition-transform">📊</span>
+          <span class="font-medium">Dashboard</span>
         </div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-900 border border-dark-700 text-gray-400 font-mono">Em breve</span>
+      </button>
 
-        <button onclick="refreshAll()" class="p-2 rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-200 transition" title="Atualizar Agora">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-          </svg>
-        </button>
+      <!-- 2. Simulação (Paper Trading) -->
+      <button onclick="switchSidebarNav('simulacao')" data-nav="simulacao" class="sidebar-nav-btn w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between border-l-2 border-brand-500 bg-dark-700/80 text-brand-400 font-semibold transition group">
+        <div class="flex items-center space-x-2.5">
+          <span class="text-base group-hover:scale-110 transition-transform">🧪</span>
+          <span class="font-medium">Simulação</span>
+        </div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-brand-900/60 text-brand-400 font-bold border border-brand-500/30 animate-pulse font-mono">Ativo</span>
+      </button>
+
+      <div class="px-3 pb-1.5 pt-3 text-[10px] font-bold uppercase tracking-wider text-gray-500 font-mono">Mercado & Triagem</div>
+
+      <!-- 3. Tokens -->
+      <button onclick="switchSidebarNav('tokens')" data-nav="tokens" class="sidebar-nav-btn w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between border-l-2 border-transparent text-gray-400 hover:text-gray-200 hover:bg-dark-700/50 transition group">
+        <div class="flex items-center space-x-2.5">
+          <span class="text-base group-hover:scale-110 transition-transform">🪙</span>
+          <span class="font-medium">Tokens</span>
+        </div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-900 border border-dark-700 text-gray-400 font-mono">Em breve</span>
+      </button>
+
+      <!-- 4. Fila de Espera -->
+      <button onclick="switchSidebarNav('waiting')" data-nav="waiting" class="sidebar-nav-btn w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between border-l-2 border-transparent text-gray-400 hover:text-gray-200 hover:bg-dark-700/50 transition group">
+        <div class="flex items-center space-x-2.5">
+          <span class="text-base group-hover:scale-110 transition-transform">⏳</span>
+          <span class="font-medium">Fila de espera</span>
+        </div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-900 border border-dark-700 text-gray-400 font-mono">Em breve</span>
+      </button>
+
+      <div class="px-3 pb-1.5 pt-3 text-[10px] font-bold uppercase tracking-wider text-gray-500 font-mono">Inteligência & Auditoria</div>
+
+      <!-- 5. Analytics -->
+      <button onclick="switchSidebarNav('analytics')" data-nav="analytics" class="sidebar-nav-btn w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between border-l-2 border-transparent text-gray-400 hover:text-gray-200 hover:bg-dark-700/50 transition group">
+        <div class="flex items-center space-x-2.5">
+          <span class="text-base group-hover:scale-110 transition-transform">📈</span>
+          <span class="font-medium">Analytics</span>
+        </div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-900 border border-dark-700 text-gray-400 font-mono">Em breve</span>
+      </button>
+
+      <!-- 6. Logs -->
+      <button onclick="switchSidebarNav('logs')" data-nav="logs" class="sidebar-nav-btn w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between border-l-2 border-transparent text-gray-400 hover:text-gray-200 hover:bg-dark-700/50 transition group">
+        <div class="flex items-center space-x-2.5">
+          <span class="text-base group-hover:scale-110 transition-transform">📜</span>
+          <span class="font-medium">Logs</span>
+        </div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-900 border border-dark-700 text-gray-400 font-mono">Em breve</span>
+      </button>
+
+      <!-- 7. Histórico -->
+      <button onclick="switchSidebarNav('history')" data-nav="history" class="sidebar-nav-btn w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between border-l-2 border-transparent text-gray-400 hover:text-gray-200 hover:bg-dark-700/50 transition group">
+        <div class="flex items-center space-x-2.5">
+          <span class="text-base group-hover:scale-110 transition-transform">🕰️</span>
+          <span class="font-medium">Histórico</span>
+        </div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-900 border border-dark-700 text-gray-400 font-mono">Em breve</span>
+      </button>
+
+      <div class="px-3 pb-1.5 pt-3 text-[10px] font-bold uppercase tracking-wider text-gray-500 font-mono">Gestão & Sistema</div>
+
+      <!-- 8. Posições -->
+      <button onclick="switchSidebarNav('positions')" data-nav="positions" class="sidebar-nav-btn w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between border-l-2 border-transparent text-gray-400 hover:text-gray-200 hover:bg-dark-700/50 transition group">
+        <div class="flex items-center space-x-2.5">
+          <span class="text-base group-hover:scale-110 transition-transform">💼</span>
+          <span class="font-medium">Posições</span>
+        </div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-900 border border-dark-700 text-gray-400 font-mono">Em breve</span>
+      </button>
+
+      <!-- 9. Settings -->
+      <button onclick="switchSidebarNav('settings')" data-nav="settings" class="sidebar-nav-btn w-full px-3 py-2.5 rounded-lg text-left flex items-center justify-between border-l-2 border-transparent text-gray-400 hover:text-gray-200 hover:bg-dark-700/50 transition group">
+        <div class="flex items-center space-x-2.5">
+          <span class="text-base group-hover:scale-110 transition-transform">⚙️</span>
+          <span class="font-medium">Settings</span>
+        </div>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-900 border border-dark-700 text-gray-400 font-mono">Em breve</span>
+      </button>
+    </nav>
+
+    <!-- Sidebar Bottom Status -->
+    <div class="p-3 border-t border-dark-700 bg-dark-900/50 text-[11px] font-mono text-gray-400 space-y-1.5">
+      <div class="flex items-center justify-between">
+        <span class="text-gray-500">Rede:</span>
+        <span class="text-emerald-400 font-bold">Solana Mainnet</span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-gray-500">Ambiente:</span>
+        <span class="px-1.5 py-0.5 rounded bg-brand-900/40 text-brand-400 border border-brand-500/20 text-[10px] font-bold">Paper Sandbox</span>
       </div>
     </div>
-  </header>
+  </aside>
 
-  <!-- MAIN CONTAINER -->
-  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+  <!-- MAIN WRAPPER (DIREITA) -->
+  <div class="flex-1 flex flex-col min-w-0 min-h-screen">
+    <!-- TOP HEADER -->
+    <header class="border-b border-dark-700 bg-dark-800/90 backdrop-blur sticky top-0 z-20">
+      <div class="px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+        <div class="flex items-center space-x-3">
+          <!-- Mobile Menu Toggle -->
+          <button onclick="toggleMobileSidebar()" class="md:hidden p-2 rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-300" title="Abrir menu lateral">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          </button>
+          
+          <div class="flex items-center space-x-2">
+            <span class="text-gray-500 text-xs hidden sm:inline font-mono">VERTEX</span>
+            <span class="text-gray-600 text-xs hidden sm:inline">/</span>
+            <span id="topbar-section-title" class="font-bold text-sm tracking-wider text-white font-mono uppercase">SIMULAÇÃO (PAPER TRADING)</span>
+          </div>
+
+          <span id="bot-status-badge" class="px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-900/60 text-emerald-400 border border-emerald-500/30 flex items-center space-x-1.5">
+            <span id="bot-status-indicator" class="h-2 w-2 rounded-full bg-emerald-400 animate-ping"></span>
+            <span id="bot-status-text">ATIVO</span>
+          </span>
+        </div>
+
+        <div class="flex items-center space-x-2 sm:space-x-3">
+          <!-- CONTROLES DA SIMULAÇÃO (exibidos na aba Simulação) -->
+          <div id="topbar-sim-controls" class="flex items-center space-x-2 sm:space-x-3">
+            <button id="btn-start" onclick="executeStartBot()" class="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm hidden" title="Executar novamente o bot">
+              <span>▶️</span>
+              <span class="font-bold">Executar Bot</span>
+            </button>
+
+            <button id="btn-pause" onclick="togglePauseBot()" class="px-2.5 py-1.5 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-white text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm" title="Pausar abertura de novas posições">
+              <span id="btn-pause-icon">⏸️</span>
+              <span id="btn-pause-text">Pausar</span>
+            </button>
+
+            <button onclick="openRestartModal()" class="px-2.5 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm" title="Reiniciar simulação (limpa trades e reseta IDs para #1)">
+              <span>🔄</span>
+              <span class="hidden sm:inline">Reiniciar</span>
+            </button>
+
+            <button onclick="openConfigModal()" class="px-2.5 py-1.5 rounded-lg bg-dark-700 hover:bg-dark-600 border border-dark-600 text-gray-200 text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm" title="Ajustar parâmetros de risco e simulação">
+              <span>⚙️</span>
+              <span class="hidden sm:inline">Ajustes</span>
+            </button>
+
+            <button id="btn-stop" onclick="openStopModal()" class="px-2.5 py-1.5 rounded-lg bg-rose-900/40 hover:bg-rose-800 border border-rose-600/30 text-rose-300 text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm" title="Encerrar bot">
+              <span>🛑</span>
+              <span class="hidden sm:inline">Encerrar</span>
+            </button>
+
+            <div class="h-5 w-px bg-dark-700 mx-1 hidden sm:block"></div>
+          </div>
+
+          <!-- REFRESH CONTROLS -->
+          <div class="hidden md:flex items-center bg-dark-900 rounded-lg p-1 border border-dark-700 text-xs font-mono">
+            <span class="text-gray-400 px-2">Atualização:</span>
+            <button onclick="setRefreshInterval(2000)" id="btn-ref-2" class="px-2 py-1 rounded bg-brand-600 text-white font-medium">2s</button>
+            <button onclick="setRefreshInterval(5000)" id="btn-ref-5" class="px-2 py-1 rounded text-gray-400 hover:text-white">5s</button>
+            <button onclick="setRefreshInterval(0)" id="btn-ref-0" class="px-2 py-1 rounded text-gray-400 hover:text-white">Pause</button>
+          </div>
+
+          <button onclick="refreshAll()" class="p-2 rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-200 transition" title="Atualizar Agora">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- MAIN CONTENT CONTAINER -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+      <!-- ========================================== -->
+      <!-- VIEW 2: SIMULAÇÃO (PAPER TRADING) - ATIVO  -->
+      <!-- ========================================== -->
+      <div id="view-simulacao" class="view-content space-y-6">
 
     <!-- KPI SUMMARY CARDS -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-      <!-- Carteira / Patrimônio Total -->
+      <!-- Carteira / Saldo em Caixa -->
       <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
-        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Patrimônio da Carteira</span>
-        <div class="mt-2 flex items-baseline justify-between">
-          <span id="kpi-equity" class="text-2xl font-bold text-gray-200">$5.00</span>
-          <span id="kpi-equity-badge" class="text-xs px-2 py-0.5 rounded font-semibold bg-brand-900/40 text-brand-400">0.0%</span>
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Saldo da Carteira</span>
+          <button onclick="openDepositModal()" class="text-[11px] px-2 py-0.5 rounded bg-brand-900/60 hover:bg-brand-700 text-brand-400 border border-brand-500/30 transition flex items-center space-x-1">
+            <span>+</span><span>Depositar</span>
+          </button>
         </div>
-        <span id="kpi-equity-sub" class="text-[11px] text-gray-500 mt-1">Banca inicial: $5.00</span>
+        <div class="mt-2 flex items-baseline justify-between">
+          <span id="kpi-equity" class="text-2xl font-bold text-gray-200">$0.00</span>
+          <span id="kpi-equity-badge" class="text-xs px-2 py-0.5 rounded font-semibold bg-dark-700 text-gray-400 font-mono">0.0%</span>
+        </div>
+        <span id="kpi-equity-sub" class="text-[11px] text-gray-500 mt-1">Saldo inicial: $0.00</span>
       </div>
 
       <!-- PnL Realizado -->
@@ -119,7 +290,7 @@
 
       <!-- Scanner Triagem -->
       <div class="bg-dark-800 border border-dark-700 rounded-xl p-4 flex flex-col justify-between">
-        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Tokens Auditados</span>
+        <span class="text-xs text-gray-400 font-medium uppercase tracking-wider">Tokens Auditados (Sessão)</span>
         <div class="mt-2 flex items-baseline justify-between">
           <span id="kpi-tokens-total" class="text-2xl font-bold text-gray-200">0</span>
           <span id="kpi-tokens-appr" class="text-xs text-gray-400">0 aprovados</span>
@@ -129,9 +300,18 @@
     </div>
 
     <!-- TABS NAVIGATION -->
-    <div class="border-b border-dark-700 flex space-x-8 text-sm font-medium">
-      <button onclick="switchTab('positions')" id="tab-btn-positions" class="tab-btn pb-3 border-b-2 border-brand-500 text-brand-500 font-semibold">
-        Posições & Trades
+    <div class="border-b border-dark-700 flex space-x-6 text-sm font-medium">
+      <button onclick="switchTab('positions')" id="tab-btn-positions" class="tab-btn pb-3 border-b-2 border-brand-500 text-brand-500 font-semibold flex items-center space-x-1.5">
+        <span>Posições Abertas</span>
+        <span id="tab-open-badge" class="px-1.5 py-0.5 rounded-full text-[10px] bg-dark-700 text-emerald-400 font-mono font-bold">0</span>
+      </button>
+      <button onclick="switchTab('positions-closed')" id="tab-btn-positions-closed" class="tab-btn pb-3 border-b-2 border-transparent text-gray-400 hover:text-gray-200 flex items-center space-x-1.5">
+        <span>Posições Fechadas</span>
+        <span id="tab-closed-badge" class="px-1.5 py-0.5 rounded-full text-[10px] bg-dark-700 text-gray-300 font-mono font-bold">0</span>
+      </button>
+      <button onclick="switchTab('waiting')" id="tab-btn-waiting" class="tab-btn pb-3 border-b-2 border-transparent text-gray-400 hover:text-gray-200 flex items-center space-x-1.5">
+        <span>Fila de Espera (Aprovados)</span>
+        <span id="tab-waiting-badge" class="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-900/80 text-amber-300 font-mono font-bold">0</span>
       </button>
       <button onclick="switchTab('tokens')" id="tab-btn-tokens" class="tab-btn pb-3 border-b-2 border-transparent text-gray-400 hover:text-gray-200">
         Tokens Auditados (Hard Gates)
@@ -144,12 +324,15 @@
       </button>
     </div>
 
-    <!-- TAB 1: POSIÇÕES -->
+    <!-- TAB 1: POSIÇÕES ABERTAS -->
     <div id="tab-positions" class="tab-content space-y-4">
       <div class="bg-dark-800 border border-dark-700 rounded-xl overflow-hidden shadow-sm">
         <div class="px-6 py-4 border-b border-dark-700 flex justify-between items-center">
-          <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300">Posições Financeiras Registradas</h2>
-          <span id="positions-count-badge" class="text-xs bg-dark-700 text-gray-300 px-2 py-0.5 rounded font-mono">0 posições</span>
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300">Posições Abertas em Andamento</h2>
+          </div>
+          <span id="positions-open-count-badge" class="text-xs bg-dark-700 text-emerald-400 px-2.5 py-0.5 rounded font-mono font-bold">0 / 5 slots</span>
         </div>
         <div class="overflow-x-auto custom-scrollbar">
           <table class="w-full text-left text-xs font-mono">
@@ -157,19 +340,92 @@
               <tr>
                 <th class="py-3 px-4">ID</th>
                 <th class="py-3 px-4">Token (Nome / Símbolo)</th>
-                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4">Estratégia</th>
+                <th class="py-3 px-4">Status / Degrau</th>
                 <th class="py-3 px-4">Entrada ($)</th>
                 <th class="py-3 px-4">Máxima ($)</th>
-                <th class="py-3 px-4">Stop ($)</th>
-                <th class="py-3 px-4">Capital Alocado ($)</th>
+                <th class="py-3 px-4">Stop / Piso ($)</th>
+                <th class="py-3 px-4">Capital ($)</th>
                 <th class="py-3 px-4">PnL ($)</th>
-                <th class="py-3 px-4">Break-Even</th>
+                <th class="py-3 px-4">Alvo / Break-Even</th>
                 <th class="py-3 px-4">Abertura</th>
               </tr>
             </thead>
-            <tbody id="positions-table-body" class="divide-y divide-dark-700 text-gray-300">
+            <tbody id="positions-open-table-body" class="divide-y divide-dark-700 text-gray-300">
               <tr>
-                <td colspan="10" class="py-8 text-center text-gray-500">Nenhuma posição registrada ainda.</td>
+                <td colspan="11" class="py-8 text-center text-gray-500">Nenhuma posição aberta no momento (0/5 slots ocupados).</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 1.5: POSIÇÕES FECHADAS (100% VENDIDAS) -->
+    <div id="tab-positions-closed" class="tab-content hidden space-y-4">
+      <div class="bg-dark-800 border border-dark-700 rounded-xl overflow-hidden shadow-sm">
+        <div class="px-6 py-4 border-b border-dark-700 flex justify-between items-center">
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-rose-500"></span>
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300">Histórico de Posições Fechadas (100% Vendidas)</h2>
+          </div>
+          <span id="positions-closed-count-badge" class="text-xs bg-dark-700 text-gray-300 px-2.5 py-0.5 rounded font-mono font-bold">0 posições encerradas</span>
+        </div>
+        <div class="overflow-x-auto custom-scrollbar">
+          <table class="w-full text-left text-xs font-mono">
+            <thead class="bg-dark-900/60 text-gray-400 uppercase tracking-wider border-b border-dark-700">
+              <tr>
+                <th class="py-3 px-4">ID</th>
+                <th class="py-3 px-4">Token (Nome / Símbolo)</th>
+                <th class="py-3 px-4">Estratégia</th>
+                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4">Motivo Saída</th>
+                <th class="py-3 px-4">Entrada ($)</th>
+                <th class="py-3 px-4">Máxima ($)</th>
+                <th class="py-3 px-4">Stop / Saída ($)</th>
+                <th class="py-3 px-4">Capital ($)</th>
+                <th class="py-3 px-4">PnL Realizado ($)</th>
+                <th class="py-3 px-4">Abertura</th>
+                <th class="py-3 px-4">Fechamento</th>
+              </tr>
+            </thead>
+            <tbody id="positions-closed-table-body" class="divide-y divide-dark-700 text-gray-300">
+              <tr>
+                <td colspan="12" class="py-8 text-center text-gray-500">Nenhuma posição encerrada até o momento.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 1.8: FILA DE ESPERA (TOKENS APROVADOS) -->
+    <div id="tab-waiting" class="tab-content hidden space-y-4">
+      <div class="bg-dark-800 border border-dark-700 rounded-xl overflow-hidden shadow-sm">
+        <div class="px-6 py-4 border-b border-dark-700 flex justify-between items-center">
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-300">Fila de Espera: Tokens Aprovados nos Hard Gates</h2>
+          </div>
+          <span id="waiting-count-badge" class="text-xs bg-dark-700 text-amber-400 px-2.5 py-0.5 rounded font-mono font-bold">0 tokens em espera</span>
+        </div>
+        <div class="overflow-x-auto custom-scrollbar">
+          <table class="w-full text-left text-xs font-mono">
+            <thead class="bg-dark-900/60 text-gray-400 uppercase tracking-wider border-b border-dark-700">
+              <tr>
+                <th class="py-3 px-4">#</th>
+                <th class="py-3 px-4">Token (Nome / Símbolo)</th>
+                <th class="py-3 px-4">DEX</th>
+                <th class="py-3 px-4">Liquidez Inicial</th>
+                <th class="py-3 px-4">Motivo da Espera</th>
+                <th class="py-3 px-4">Cotação ($)</th>
+                <th class="py-3 px-4">Entrada na Fila</th>
+                <th class="py-3 px-4">Status de Execução</th>
+              </tr>
+            </thead>
+            <tbody id="waiting-table-body" class="divide-y divide-dark-700 text-gray-300">
+              <tr>
+                <td colspan="8" class="py-8 text-center text-gray-500">Nenhum token na fila de espera no momento. Todos os aprovados foram executados ou estão em monitoramento.</td>
               </tr>
             </tbody>
           </table>
@@ -188,6 +444,7 @@
         <div class="flex items-center space-x-2 text-xs">
           <button onclick="filterTokensByStatus('ALL')" id="filter-all" class="px-3 py-1.5 rounded bg-brand-600 text-white font-medium">Todos</button>
           <button onclick="filterTokensByStatus('APPROVED')" id="filter-approved" class="px-3 py-1.5 rounded bg-dark-700 text-gray-300 hover:text-white">Aprovados</button>
+          <button onclick="switchTab('waiting')" id="filter-waiting" class="px-3 py-1.5 rounded bg-dark-700 text-amber-300 hover:text-white flex items-center space-x-1"><span>Em Espera</span><span id="waiting-filter-badge" class="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-amber-900/80 text-amber-300 font-mono font-bold">0</span></button>
           <button onclick="filterTokensByStatus('REJECTED')" id="filter-rejected" class="px-3 py-1.5 rounded bg-dark-700 text-gray-300 hover:text-white">Rejeitados</button>
         </div>
       </div>
@@ -258,7 +515,484 @@
       </div>
     </div>
 
-  </main>
+      </div> <!-- /view-simulacao -->
+
+      <!-- =================================================== -->
+      <!-- VIEW 1: DASHBOARD (OPERAÇÕES REAIS) - EM BREVE      -->
+      <!-- =================================================== -->
+      <div id="view-dashboard" class="view-content hidden space-y-6">
+        <div class="bg-dark-800 border border-dark-700 rounded-2xl p-8 relative overflow-hidden shadow-xl">
+          <div class="absolute -right-10 -top-10 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+          <div class="relative z-10 max-w-3xl space-y-5">
+            <div class="flex items-center space-x-3.5">
+              <div class="text-3xl p-3.5 bg-dark-900 border border-dark-700 rounded-2xl shadow-inner">📊</div>
+              <div>
+                <div class="flex items-center space-x-2.5">
+                  <h2 class="text-xl font-bold text-white tracking-wide">Dashboard de Operações Reais</h2>
+                  <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-amber-900/60 text-amber-400 border border-amber-500/30">EM BREVE</span>
+                </div>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">Solana Mainnet-Beta • Live Execution Engine (Segregação Rigorosa)</p>
+              </div>
+            </div>
+
+            <div class="p-4 bg-dark-900/80 border border-dark-700 rounded-xl space-y-2">
+              <p class="text-xs text-gray-300 leading-relaxed font-sans">
+                Esta área será o centro de comando exclusivo para <strong class="text-white">operações reais</strong> com capital na Solana Mainnet-Beta. Todas as métricas de PnL, ordens e posições que constarão aqui serão <strong class="text-emerald-400">100% segregadas da simulação</strong>.
+              </p>
+              <p class="text-[11px] text-gray-400 font-sans">
+                Como atualmente o foco operacional é a validação algorítmica no modo Simulação, este módulo está em preparação técnica. Quaisquer ajustes alterados na aba Simulação afetam exclusivamente o ambiente de testes e não terão impacto quando o modo real for ativado.
+              </p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1 font-mono text-xs">
+              <div class="p-4 bg-dark-900/60 rounded-xl border border-dark-700/80 space-y-1.5 hover:border-dark-600 transition">
+                <span class="text-emerald-400 font-bold flex items-center space-x-2"><span>⚡</span><span>Jupiter Aggregator v6</span></span>
+                <p class="text-[11px] text-gray-400 font-sans">Roteamento otimizado de liquidez on-chain com proteção contra slippage e MEV.</p>
+              </div>
+              <div class="p-4 bg-dark-900/60 rounded-xl border border-dark-700/80 space-y-1.5 hover:border-dark-600 transition">
+                <span class="text-indigo-400 font-bold flex items-center space-x-2"><span>🔐</span><span>Carteira Não-Custodial</span></span>
+                <p class="text-[11px] text-gray-400 font-sans">Assinatura direta via Keypair isolada em arquivo .env protegido (sem chaves em disco).</p>
+              </div>
+              <div class="p-4 bg-dark-900/60 rounded-xl border border-dark-700/80 space-y-1.5 hover:border-dark-600 transition">
+                <span class="text-sky-400 font-bold flex items-center space-x-2"><span>🛡️</span><span>6 Hard Gates On-Chain</span></span>
+                <p class="text-[11px] text-gray-400 font-sans">Validação atômica de Mint Authority, LP Queimada (&ge;98%) e concentração de holders.</p>
+              </div>
+              <div class="p-4 bg-dark-900/60 rounded-xl border border-dark-700/80 space-y-1.5 hover:border-dark-600 transition">
+                <span class="text-amber-400 font-bold flex items-center space-x-2"><span>💰</span><span>Gestão de Saldo Real</span></span>
+                <p class="text-[11px] text-gray-400 font-sans">Saldo de SOL/USDC na carteira on-chain atualizado por websockets de conta.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!-- VIEW 3: TOKENS - EM BREVE                           -->
+      <!-- =================================================== -->
+      <div id="view-tokens" class="view-content hidden space-y-6">
+        <div class="bg-dark-800 border border-dark-700 rounded-2xl p-8 relative overflow-hidden shadow-xl">
+          <div class="relative z-10 max-w-2xl space-y-4">
+            <div class="flex items-center space-x-3.5">
+              <div class="text-3xl p-3.5 bg-dark-900 border border-dark-700 rounded-2xl shadow-inner">🪙</div>
+              <div>
+                <div class="flex items-center space-x-2.5">
+                  <h2 class="text-xl font-bold text-white tracking-wide">Catálogo de Tokens</h2>
+                  <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-dark-700 text-gray-300 border border-dark-600">EM BREVE</span>
+                </div>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">Explorador Global de Ativos Solana & Filtros Avançados</p>
+              </div>
+            </div>
+            <p class="text-xs text-gray-300 leading-relaxed font-sans">
+              Visão expandida e dedicada do catálogo de tokens detectados na Solana. Permitirá busca por contrato, ordenação por volume de 24h, verificação de idade de criação (1h a 30 dias), status de graduação Raydium e histórico de auditorias.
+            </p>
+            <div class="p-3 bg-dark-900/60 rounded-xl border border-dark-700 text-[11px] text-gray-400 font-mono">
+              💡 <span class="text-gray-300">Dica:</span> Para acompanhar os tokens auditados da sessão atual, utilize a aba <span class="text-brand-400 font-bold">Simulação &gt; Tokens Auditados</span>.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!-- VIEW 4: FILA DE ESPERA - EM BREVE                   -->
+      <!-- =================================================== -->
+      <div id="view-waiting" class="view-content hidden space-y-6">
+        <div class="bg-dark-800 border border-dark-700 rounded-2xl p-8 relative overflow-hidden shadow-xl">
+          <div class="relative z-10 max-w-2xl space-y-4">
+            <div class="flex items-center space-x-3.5">
+              <div class="text-3xl p-3.5 bg-dark-900 border border-dark-700 rounded-2xl shadow-inner">⏳</div>
+              <div>
+                <div class="flex items-center space-x-2.5">
+                  <h2 class="text-xl font-bold text-white tracking-wide">Fila de Espera Global</h2>
+                  <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-dark-700 text-gray-300 border border-dark-600">EM BREVE</span>
+                </div>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">Orquestração Centralizada de Prioridade & Alocação de Slots</p>
+              </div>
+            </div>
+            <p class="text-xs text-gray-300 leading-relaxed font-sans">
+              Interface dedicada para gestão da fila global de espera de tokens aprovados entre múltiplas estratégias. Oferecerá reordenação por liquidez, alertas de dumping em tempo real e regras customizadas de timeout.
+            </p>
+            <div class="p-3 bg-dark-900/60 rounded-xl border border-dark-700 text-[11px] text-gray-400 font-mono">
+              💡 <span class="text-gray-300">Dica:</span> A fila de espera ativa da simulação já está operacional em <span class="text-brand-400 font-bold">Simulação &gt; Fila de Espera (Aprovados)</span>.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!-- VIEW 5: ANALYTICS - EM BREVE                        -->
+      <!-- =================================================== -->
+      <div id="view-analytics" class="view-content hidden space-y-6">
+        <div class="bg-dark-800 border border-dark-700 rounded-2xl p-8 relative overflow-hidden shadow-xl">
+          <div class="relative z-10 max-w-2xl space-y-4">
+            <div class="flex items-center space-x-3.5">
+              <div class="text-3xl p-3.5 bg-dark-900 border border-dark-700 rounded-2xl shadow-inner">📈</div>
+              <div>
+                <div class="flex items-center space-x-2.5">
+                  <h2 class="text-xl font-bold text-white tracking-wide">Analytics & Inteligência Quantitativa</h2>
+                  <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-dark-700 text-gray-300 border border-dark-600">EM BREVE</span>
+                </div>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">Métricas de Performance, Drawdown, Win Rate & Risco</p>
+              </div>
+            </div>
+            <p class="text-xs text-gray-300 leading-relaxed font-sans">
+              Gráficos interativos com curvas de patrimônio, correlação entre liquidez inicial e ROI de saída, distribuição de lucros/prejuízos, tempos médios de permanência em posição e análise estatística de slippage.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!-- VIEW 6: LOGS - EM BREVE                             -->
+      <!-- =================================================== -->
+      <div id="view-logs" class="view-content hidden space-y-6">
+        <div class="bg-dark-800 border border-dark-700 rounded-2xl p-8 relative overflow-hidden shadow-xl">
+          <div class="relative z-10 max-w-2xl space-y-4">
+            <div class="flex items-center space-x-3.5">
+              <div class="text-3xl p-3.5 bg-dark-900 border border-dark-700 rounded-2xl shadow-inner">📜</div>
+              <div>
+                <div class="flex items-center space-x-2.5">
+                  <h2 class="text-xl font-bold text-white tracking-wide">Logs de Runtime em Tempo Real</h2>
+                  <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-dark-700 text-gray-300 border border-dark-600">EM BREVE</span>
+                </div>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">Terminal Integrado com Streaming ao Vivo</p>
+              </div>
+            </div>
+            <p class="text-xs text-gray-300 leading-relaxed font-sans">
+              Visualizador estilo terminal para inspeção em tempo real das mensagens geradas pelo bot. Filtros por módulo (<code class="text-brand-400">scanner</code>, <code class="text-emerald-400">engine</code>, <code class="text-indigo-400">security</code>) e busca rápida de ocorrências.
+            </p>
+            <div class="p-3 bg-dark-900/60 rounded-xl border border-dark-700 text-[11px] text-gray-400 font-mono">
+              📄 Logs do subprocesso em disco: <span class="text-gray-200">data/bot_runtime.log</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!-- VIEW 7: HISTÓRICO - EM BREVE                        -->
+      <!-- =================================================== -->
+      <div id="view-history" class="view-content hidden space-y-6">
+        <div class="bg-dark-800 border border-dark-700 rounded-2xl p-8 relative overflow-hidden shadow-xl">
+          <div class="relative z-10 max-w-2xl space-y-4">
+            <div class="flex items-center space-x-3.5">
+              <div class="text-3xl p-3.5 bg-dark-900 border border-dark-700 rounded-2xl shadow-inner">🕰️</div>
+              <div>
+                <div class="flex items-center space-x-2.5">
+                  <h2 class="text-xl font-bold text-white tracking-wide">Histórico Permanente de Trades</h2>
+                  <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-dark-700 text-gray-300 border border-dark-600">EM BREVE</span>
+                </div>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">Livro-Razão Contábil Multi-Sessão & Exportação</p>
+              </div>
+            </div>
+            <p class="text-xs text-gray-300 leading-relaxed font-sans">
+              Histórico consolidado com todas as posições encerradas desde o primeiro dia de operação. Inclui filtros por período, exportação de relatórios para CSV/JSON e apuração de taxas de transação da rede.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!-- VIEW 8: POSIÇÕES - EM BREVE                         -->
+      <!-- =================================================== -->
+      <div id="view-positions" class="view-content hidden space-y-6">
+        <div class="bg-dark-800 border border-dark-700 rounded-2xl p-8 relative overflow-hidden shadow-xl">
+          <div class="relative z-10 max-w-2xl space-y-4">
+            <div class="flex items-center space-x-3.5">
+              <div class="text-3xl p-3.5 bg-dark-900 border border-dark-700 rounded-2xl shadow-inner">💼</div>
+              <div>
+                <div class="flex items-center space-x-2.5">
+                  <h2 class="text-xl font-bold text-white tracking-wide">Gestão de Posições Multi-Carteira</h2>
+                  <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-dark-700 text-gray-300 border border-dark-600">EM BREVE</span>
+                </div>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">Supervisão Consolidada de Portfólio Real</p>
+              </div>
+            </div>
+            <p class="text-xs text-gray-300 leading-relaxed font-sans">
+              Gerenciamento avançado de posições ativas em múltiplas carteiras físicas ou sub-contas com rebalanceamento de exposição e gatilhos manuais de emergência.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!-- VIEW 9: SETTINGS - EM BREVE                         -->
+      <!-- =================================================== -->
+      <div id="view-settings" class="view-content hidden space-y-6">
+        <div class="bg-dark-800 border border-dark-700 rounded-2xl p-8 relative overflow-hidden shadow-xl">
+          <div class="relative z-10 max-w-2xl space-y-4">
+            <div class="flex items-center space-x-3.5">
+              <div class="text-3xl p-3.5 bg-dark-900 border border-dark-700 rounded-2xl shadow-inner">⚙️</div>
+              <div>
+                <div class="flex items-center space-x-2.5">
+                  <h2 class="text-xl font-bold text-white tracking-wide">Configurações Globais do Sistema</h2>
+                  <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-dark-700 text-gray-300 border border-dark-600">EM BREVE</span>
+                </div>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">Infraestrutura Solana, Endpoints RPC & Telemetria</p>
+              </div>
+            </div>
+            <p class="text-xs text-gray-300 leading-relaxed font-sans">
+              Configurações centrais de nós RPC redundantes Solana (Helius, QuickNode, Triton), rate-limits de provedores de cotação e alertas via Telegram / Discord webhook.
+            </p>
+            <div class="p-3 bg-dark-900/60 rounded-xl border border-dark-700 text-[11px] text-gray-400 font-mono">
+              💡 <span class="text-gray-300">Dica:</span> Para os parâmetros operacionais da simulação (stop, break-even, slippage), use o botão <span class="text-gray-200 font-bold">⚙️ Ajustes</span> na barra superior.
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div> <!-- /MAIN WRAPPER (DIREITA) -->
+
+  <!-- MODAL: CONFIGURAÇÕES DE SIMULAÇÃO E RISCO -->
+  <div id="config-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-dark-800 border border-dark-700 rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+      <!-- Modal Header -->
+      <div class="p-5 border-b border-dark-700 flex items-center justify-between bg-dark-900/60">
+        <div class="flex items-center space-x-2">
+          <span class="text-brand-500 text-lg">⚙️</span>
+          <h3 class="font-bold text-base text-gray-100">Configurações de Simulação & Gestão de Risco</h3>
+        </div>
+        <button onclick="closeConfigModal()" class="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-dark-700 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="p-6 overflow-y-auto custom-scrollbar space-y-6 text-xs font-mono">
+        <!-- Section 1: Saldo da Carteira (Paper) -->
+        <div class="p-4 rounded-xl bg-dark-900/70 border border-dark-700 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-gray-300 font-bold uppercase tracking-wider">💵 Capital em Carteira (Simulação)</span>
+            <span id="cfg-wallet-display" class="text-base font-bold text-emerald-400">$0.00</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <div>
+              <label class="text-gray-400 block mb-1">Saldo Inicial da Simulação (USD)</label>
+              <input id="cfg-wallet-usd" type="number" step="1" min="1" max="100000" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-gray-500">Banca inicial base da simulação (ex: $10, $5)</span>
+            </div>
+            <div class="flex flex-col justify-end space-y-1.5">
+              <span class="text-gray-400 text-[11px]">Depósito Rápido:</span>
+              <div class="flex items-center space-x-2">
+                <button type="button" onclick="quickDeposit(10)" class="px-2.5 py-1.5 rounded bg-dark-700 hover:bg-brand-900/60 text-brand-400 border border-dark-600 hover:border-brand-500/40 transition text-xs font-mono">+$10</button>
+                <button type="button" onclick="quickDeposit(25)" class="px-2.5 py-1.5 rounded bg-dark-700 hover:bg-brand-900/60 text-brand-400 border border-dark-600 hover:border-brand-500/40 transition text-xs font-mono">+$25</button>
+                <button type="button" onclick="quickDeposit(50)" class="px-2.5 py-1.5 rounded bg-dark-700 hover:bg-brand-900/60 text-brand-400 border border-dark-600 hover:border-brand-500/40 transition text-xs font-mono">+$50</button>
+                <button type="button" onclick="quickDeposit(100)" class="px-2.5 py-1.5 rounded bg-dark-700 hover:bg-brand-900/60 text-brand-400 border border-dark-600 hover:border-brand-500/40 transition text-xs font-mono">+$100</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 2: Posições e Execução -->
+        <div class="p-4 rounded-xl bg-dark-900/70 border border-dark-700 space-y-4">
+          <span class="text-gray-300 font-bold uppercase tracking-wider block">🎯 Parâmetros de Entrada & Alocação</span>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label class="text-gray-400 block mb-1">Compra por Posição (USD)</label>
+              <input id="cfg-buy-usd" type="number" step="0.05" min="0.05" max="1000" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-gray-500">Valor exato por ordem (mín: $0.05)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Slots Concomitantes (1-10)</label>
+              <input id="cfg-max-slots" type="number" min="1" max="10" step="1" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-gray-500">Capacidade de posições</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Slippage Máximo (%)</label>
+              <input id="cfg-slippage" type="number" step="0.1" min="0.1" max="10.0" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-gray-500">Tolerância DEX</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 3: Gestão de Risco e Saída -->
+        <div class="p-4 rounded-xl bg-dark-900/70 border border-dark-700 space-y-4">
+          <span class="text-gray-300 font-bold uppercase tracking-wider block">🛡️ Gestão de Saída & Proteção de Lucro</span>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label class="text-gray-400 block mb-1">Break-Even Trigger (+%)</label>
+              <input id="cfg-be-gain" type="number" step="5" min="10" max="500" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-emerald-400">Vende 50% (+100% = 2x)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Trailing Stop Drop (-%)</label>
+              <input id="cfg-trailing-drop" type="number" step="1" min="1" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-amber-400">Recuo do topo (ex: 12-15%)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Stop-Loss Emergencial (-%)</label>
+              <input id="cfg-stop-loss" type="number" step="1" min="1" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-rose-400">Corte do preço de entrada</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 3.5: Estratégias Dual-Track & Swing Ratchet -->
+        <div class="p-4 rounded-xl bg-dark-900/70 border border-purple-500/30 space-y-4">
+          <div class="flex items-center justify-between">
+            <span class="text-purple-300 font-bold uppercase tracking-wider block">🌊 Estratégia Dual-Track & Swing Ratchet (Catraca)</span>
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-900/60 text-purple-300 border border-purple-500/30">Step Trailing</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="text-gray-400 block mb-1">Modo Operacional</label>
+              <select id="cfg-strategy-mode" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+                <option value="DUAL">DUAL SIMULTÂNEO (Scalp + Swing por token)</option>
+                <option value="SCALP_ONLY">APENAS SCALP (Vende 50% em 2x + Trail -12%)</option>
+                <option value="SWING_ONLY">APENAS SWING (Catraca de Degraus 2x/3x/5x)</option>
+              </select>
+              <span class="text-[10px] text-gray-500">Divide cada trade em 50% Scalp e 50% Swing no modo Dual</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Swing Stop-Loss Inicial (-%)</label>
+              <input id="cfg-swing-stop" type="number" step="1" min="5" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-rose-400">Stop antes do Degrau 1 (ex: -20%)</span>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-1">
+            <div>
+              <label class="text-gray-400 block mb-1">Degrau 1 (Alvo x)</label>
+              <input id="cfg-swing-tier1" type="number" step="0.5" min="1.5" max="10" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">2.0x (Piso no BE $x)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Degrau 2 (Alvo x)</label>
+              <input id="cfg-swing-tier2" type="number" step="0.5" min="2.0" max="20" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">3.0x (Piso no Degrau 1 $y)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Degrau 3 (Alvo x)</label>
+              <input id="cfg-swing-tier3" type="number" step="0.5" min="3.0" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">5.0x (Piso no Degrau 2 $z)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Trailing Elástico (-%)</label>
+              <input id="cfg-swing-trail" type="number" step="1" min="10" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-amber-400">Apoio de topo (ex: -25%)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 4: Reentrada Inteligente (Anti-Falling-Knife) -->
+        <div class="p-4 rounded-xl bg-dark-900/70 border border-dark-700 space-y-4">
+          <span class="text-gray-300 font-bold uppercase tracking-wider block">🔄 Reentrada Inteligente (Anti-Falling-Knife)</span>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label class="text-gray-400 block mb-1">Cool-off Trailing Stop (min)</label>
+              <input id="cfg-cooloff-trailing" type="number" step="1" min="1" max="120" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-gray-500">Espera mínima pós-lucro</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Cool-off Stop Loss (min)</label>
+              <input id="cfg-cooloff-stoploss" type="number" step="5" min="5" max="360" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-gray-500">Espera mínima pós-stop</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Repique de Suporte (% min)</label>
+              <input id="cfg-reentry-bounce" type="number" step="0.5" min="0.5" max="20.0" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-gray-500">Recuperação da mínima</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="p-4 border-t border-dark-700 flex justify-end space-x-3 bg-dark-900/60">
+        <button type="button" onclick="closeConfigModal()" class="px-4 py-2 rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-300 text-xs font-semibold transition">
+          Cancelar
+        </button>
+        <button type="button" onclick="saveConfig()" class="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold flex items-center space-x-1.5 transition">
+          <span>💾 Salvar Alterações</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: REINICIAR SIMULAÇÃO -->
+  <div id="restart-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-dark-800 border border-dark-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center space-x-2 text-indigo-400">
+        <span class="text-xl">🔄</span>
+        <h3 class="font-bold text-base text-gray-100">Reiniciar Sessão Simulada</h3>
+      </div>
+      <p class="text-xs text-gray-300 leading-relaxed font-sans">
+        Esta ação limpa o histórico de trades e posições simuladas da sessão atual, zerando o contador de IDs de posições para iniciar novamente a partir do <span class="text-brand-400 font-bold font-mono">#1</span>.
+      </p>
+      <div class="p-3 bg-dark-900/80 rounded-lg border border-dark-700 text-[11px] text-gray-400 space-y-1">
+        <p class="text-emerald-400 font-semibold">✓ Preservação Inteligente:</p>
+        <p>Os tokens catalogados e aprovados pelo Scanner continuam salvos no banco SQLite para reavaliação contínua da watchlist.</p>
+      </div>
+      <div>
+        <label class="text-xs font-mono text-gray-400 block mb-1">Saldo Inicial da Nova Sessão (USD):</label>
+        <input id="restart-wallet-input" type="number" step="1" min="1" value="10.00" class="w-full bg-dark-900 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 font-mono text-sm focus:outline-none focus:border-brand-500">
+      </div>
+      <div class="flex justify-end space-x-3 pt-2">
+        <button type="button" onclick="closeRestartModal()" class="px-4 py-2 rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-300 text-xs font-semibold transition">
+          Cancelar
+        </button>
+        <button type="button" onclick="executeRestart()" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition">
+          Confirmar e Reiniciar em #1
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: DEPÓSITO RÁPIDO -->
+  <div id="deposit-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-dark-800 border border-dark-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center space-x-2 text-emerald-400">
+        <span class="text-xl">💵</span>
+        <h3 class="font-bold text-base text-gray-100">Depositar Saldo na Carteira</h3>
+      </div>
+      <p class="text-xs text-gray-400 font-sans">
+        Adicione fundos à sua banca de Paper Trading para permitir a abertura de novas posições simultâneas.
+      </p>
+      <div class="grid grid-cols-4 gap-2 font-mono text-xs">
+        <button type="button" onclick="quickDeposit(10)" class="py-2 rounded-lg bg-dark-900 hover:bg-brand-900/60 text-brand-400 border border-dark-700 hover:border-brand-500/40 transition font-bold">+$10</button>
+        <button type="button" onclick="quickDeposit(25)" class="py-2 rounded-lg bg-dark-900 hover:bg-brand-900/60 text-brand-400 border border-dark-700 hover:border-brand-500/40 transition font-bold">+$25</button>
+        <button type="button" onclick="quickDeposit(50)" class="py-2 rounded-lg bg-dark-900 hover:bg-brand-900/60 text-brand-400 border border-dark-700 hover:border-brand-500/40 transition font-bold">+$50</button>
+        <button type="button" onclick="quickDeposit(100)" class="py-2 rounded-lg bg-dark-900 hover:bg-brand-900/60 text-brand-400 border border-dark-700 hover:border-brand-500/40 transition font-bold">+$100</button>
+      </div>
+      <div>
+        <label class="text-xs font-mono text-gray-400 block mb-1">Ou digite um valor personalizado (USD):</label>
+        <input id="deposit-custom-input" type="number" step="1" min="1" placeholder="Ex: 50.00" class="w-full bg-dark-900 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 font-mono text-sm focus:outline-none focus:border-brand-500">
+      </div>
+      <div class="flex justify-end space-x-3 pt-2">
+        <button type="button" onclick="closeDepositModal()" class="px-4 py-2 rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-300 text-xs font-semibold transition">
+          Cancelar
+        </button>
+        <button type="button" onclick="executeCustomDeposit()" class="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold transition">
+          Confirmar Depósito
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: ENCERRAMENTO -->
+  <div id="stop-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-dark-800 border border-dark-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center space-x-2 text-rose-400">
+        <span class="text-xl">🛑</span>
+        <h3 class="font-bold text-base text-gray-100">Encerrar Vertex-bot</h3>
+      </div>
+      <p class="text-xs text-gray-300 font-sans leading-relaxed">
+        Tem certeza de que deseja parar a execução do bot? O loop de eventos e os workers de triagem serão finalizados com segurança e o estado salvo no SQLite.
+      </p>
+      <div class="p-2.5 bg-dark-900/80 rounded-lg border border-dark-700 text-[11px] text-gray-400">
+        <span class="text-emerald-400 font-semibold">💡 Dica:</span> Você poderá executá-lo novamente a qualquer momento clicando em <strong class="text-emerald-400">"▶️ Executar Bot"</strong> no topo.
+      </div>
+      <div class="flex justify-end space-x-3 pt-2">
+        <button type="button" onclick="closeStopModal()" class="px-4 py-2 rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-300 text-xs font-semibold transition">
+          Cancelar
+        </button>
+        <button type="button" onclick="executeStop()" class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition">
+          Encerrar Bot
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
   <!-- SCRIPTS -->
   <script>
@@ -267,6 +1001,288 @@
     let currentRefreshInterval = 2000;
     let currentStatusFilter = 'ALL';
     let searchDebounce = null;
+    let currentBotStatus = null;
+    let currentMaxSlots = 5;
+    let currentSidebarNav = 'simulacao';
+    const savedInitial = localStorage.getItem('vertex_initial_wallet');
+    let currentInitialWallet = savedInitial ? parseFloat(savedInitial) : 10.0;
+    let currentActiveCapital = 0.0;
+
+    const SIDEBAR_NAV_TITLES = {
+      dashboard: 'DASHBOARD (OPERAÇÕES REAIS)',
+      simulacao: 'SIMULAÇÃO (PAPER TRADING)',
+      tokens: 'CATÁLOGO DE TOKENS',
+      waiting: 'FILA DE ESPERA GLOBAL',
+      analytics: 'ANALYTICS & MÉTRICAS QUANT',
+      logs: 'LOGS DE RUNTIME EM TEMPO REAL',
+      history: 'HISTÓRICO PERMANENTE DE TRADES',
+      positions: 'GESTÃO MULTI-CARTEIRA',
+      settings: 'CONFIGURAÇÕES GLOBAIS DO SISTEMA'
+    };
+
+    function toggleMobileSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const backdrop = document.getElementById('sidebar-backdrop');
+      if (!sidebar) return;
+      sidebar.classList.toggle('-translate-x-full');
+      if (backdrop) {
+        backdrop.classList.toggle('hidden');
+      }
+    }
+
+    function switchSidebarNav(navId) {
+      currentSidebarNav = navId;
+      try {
+        localStorage.setItem('vertex_active_sidebar', navId);
+      } catch (e) {}
+
+      // Close mobile sidebar if open
+      const sidebar = document.getElementById('sidebar');
+      const backdrop = document.getElementById('sidebar-backdrop');
+      if (sidebar && !sidebar.classList.contains('-translate-x-full')) {
+        sidebar.classList.add('-translate-x-full');
+      }
+      if (backdrop && !backdrop.classList.contains('hidden')) {
+        backdrop.classList.add('hidden');
+      }
+
+      // Update sidebar nav buttons
+      document.querySelectorAll('.sidebar-nav-btn').forEach(btn => {
+        const id = btn.getAttribute('data-nav');
+        if (id === navId) {
+          btn.classList.add('border-brand-500', 'bg-dark-700/80', 'text-brand-400', 'font-semibold');
+          btn.classList.remove('border-transparent', 'text-gray-400');
+        } else {
+          btn.classList.remove('border-brand-500', 'bg-dark-700/80', 'text-brand-400', 'font-semibold');
+          btn.classList.add('border-transparent', 'text-gray-400');
+        }
+      });
+
+      // Update top header title
+      const titleEl = document.getElementById('topbar-section-title');
+      if (titleEl) {
+        titleEl.textContent = SIDEBAR_NAV_TITLES[navId] || navId.toUpperCase();
+      }
+
+      // Toggle topbar simulation controls visibility
+      const simControls = document.getElementById('topbar-sim-controls');
+      if (simControls) {
+        if (navId === 'simulacao') {
+          simControls.classList.remove('hidden');
+        } else {
+          simControls.classList.add('hidden');
+        }
+      }
+
+      // Switch view container
+      document.querySelectorAll('.view-content').forEach(view => {
+        view.classList.add('hidden');
+      });
+      const activeView = document.getElementById('view-' + navId);
+      if (activeView) {
+        activeView.classList.remove('hidden');
+      }
+
+      if (navId === 'simulacao') {
+        refreshCurrentTab();
+      }
+    }
+
+    // TOAST NOTIFICATIONS
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+      const toast = document.createElement('div');
+      const bg = type === 'success' ? 'bg-emerald-900/90 border-emerald-500/50 text-emerald-200' 
+               : type === 'error' ? 'bg-rose-900/90 border-rose-500/50 text-rose-200'
+               : 'bg-amber-900/90 border-amber-500/50 text-amber-200';
+      toast.className = `p-3 rounded-xl border ${bg} shadow-lg text-xs font-mono backdrop-blur transition-all duration-300 transform translate-y-2 opacity-0 pointer-events-auto flex items-center space-x-2`;
+      toast.innerHTML = `<span>${type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}</span><span>${message}</span>`;
+      container.appendChild(toast);
+      
+      requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+      });
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    // GESTÃO & ATUALIZAÇÃO DO SALDO DA CARTEIRA
+    function updateWalletDisplay(cashVal, initialWallet, activeCap) {
+      if (initialWallet !== undefined && initialWallet !== null && parseFloat(initialWallet) > 0) {
+        currentInitialWallet = parseFloat(initialWallet);
+        try { localStorage.setItem('vertex_initial_wallet', currentInitialWallet); } catch (e) {}
+      }
+      if (activeCap !== undefined && activeCap !== null) {
+        currentActiveCapital = parseFloat(activeCap);
+      }
+
+      const walletDisplay = document.getElementById('cfg-wallet-display');
+      if (walletDisplay && cashVal !== undefined && cashVal !== null) {
+        walletDisplay.textContent = '$' + parseFloat(cashVal).toFixed(2);
+      }
+
+      const equityEl = document.getElementById('kpi-equity');
+      const badgeEl = document.getElementById('kpi-equity-badge');
+      const subEl = document.getElementById('kpi-equity-sub');
+
+      if (!equityEl || cashVal === undefined || cashVal === null) return;
+
+      const cash = parseFloat(cashVal);
+      const init = currentInitialWallet > 0 ? currentInitialWallet : 10.0;
+      const diff = cash - init;
+      const diffPct = ((diff / init) * 100.0).toFixed(1);
+
+      equityEl.textContent = '$' + cash.toFixed(2);
+      if (diff > 0.009) {
+        equityEl.className = 'text-2xl font-bold text-brand-500';
+      } else if (diff < -0.009) {
+        equityEl.className = 'text-2xl font-bold text-rose-500';
+      } else {
+        equityEl.className = 'text-2xl font-bold text-gray-200';
+      }
+
+      if (badgeEl) {
+        const isGain = parseFloat(diffPct) > 0;
+        const isLoss = parseFloat(diffPct) < 0;
+        badgeEl.textContent = (isGain ? '+' : '') + diffPct + '%';
+        if (isGain) {
+          badgeEl.className = 'text-xs px-2 py-0.5 rounded font-semibold bg-brand-900/40 text-brand-400 font-mono';
+        } else if (isLoss) {
+          badgeEl.className = 'text-xs px-2 py-0.5 rounded font-semibold bg-rose-900/40 text-rose-400 font-mono';
+        } else {
+          badgeEl.className = 'text-xs px-2 py-0.5 rounded font-semibold bg-dark-700 text-gray-400 font-mono';
+        }
+      }
+
+      if (subEl) {
+        const activeStr = currentActiveCapital > 0.009 ? ' | Alocado: $' + currentActiveCapital.toFixed(2) : '';
+        subEl.textContent = 'Saldo inicial: $' + init.toFixed(2) + activeStr;
+      }
+    }
+
+    // BOT STATUS & CONTROLS
+    async function fetchBotStatus() {
+      try {
+        const res = await fetch('/api/bot/status?_t=' + Date.now());
+        const json = await res.json();
+        if (json.status === 'success') {
+          currentBotStatus = json.data;
+          const { is_running, is_paused, wallet_balance_usd, settings } = currentBotStatus;
+
+          if (settings && settings.max_concurrent_positions) {
+            currentMaxSlots = settings.max_concurrent_positions;
+          }
+
+          // Update Status Badge
+          const badge = document.getElementById('bot-status-badge');
+          const indicator = document.getElementById('bot-status-indicator');
+          const text = document.getElementById('bot-status-text');
+          const btnStart = document.getElementById('btn-start');
+          const btnPause = document.getElementById('btn-pause');
+          const btnPauseIcon = document.getElementById('btn-pause-icon');
+          const btnPauseText = document.getElementById('btn-pause-text');
+          const btnStop = document.getElementById('btn-stop');
+
+          if (!is_running) {
+            if (badge) badge.className = 'px-2.5 py-0.5 rounded text-xs font-semibold bg-rose-900/60 text-rose-400 border border-rose-500/30 flex items-center space-x-1.5';
+            if (indicator) indicator.className = 'h-2 w-2 rounded-full bg-rose-400';
+            if (text) text.textContent = 'ENCERRADO';
+
+            if (btnStart) btnStart.classList.remove('hidden');
+            if (btnPause) btnPause.classList.add('hidden');
+            if (btnStop) btnStop.classList.add('hidden');
+          } else if (is_paused) {
+            if (badge) badge.className = 'px-2.5 py-0.5 rounded text-xs font-semibold bg-amber-900/60 text-amber-400 border border-amber-500/30 flex items-center space-x-1.5';
+            if (indicator) indicator.className = 'h-2 w-2 rounded-full bg-amber-400';
+            if (text) text.textContent = 'PAUSADO';
+
+            if (btnStart) btnStart.classList.add('hidden');
+            if (btnStop) btnStop.classList.remove('hidden');
+            if (btnPause) {
+              btnPause.classList.remove('hidden');
+              btnPause.className = 'px-2.5 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm';
+              btnPauseIcon.textContent = '▶️';
+              btnPauseText.textContent = 'Retomar';
+            }
+          } else {
+            if (badge) badge.className = 'px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-900/60 text-emerald-400 border border-emerald-500/30 flex items-center space-x-1.5';
+            if (indicator) indicator.className = 'h-2 w-2 rounded-full bg-emerald-400 animate-ping';
+            if (text) text.textContent = 'ATIVO';
+
+            if (btnStart) btnStart.classList.add('hidden');
+            if (btnStop) btnStop.classList.remove('hidden');
+            if (btnPause) {
+              btnPause.classList.remove('hidden');
+              btnPause.className = 'px-2.5 py-1.5 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-white text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm';
+              btnPauseIcon.textContent = '⏸️';
+              btnPauseText.textContent = 'Pausar';
+            }
+          }
+
+          if (currentBotStatus.initial_wallet_usd !== undefined && currentBotStatus.initial_wallet_usd > 0) {
+            currentInitialWallet = parseFloat(currentBotStatus.initial_wallet_usd);
+            try { localStorage.setItem('vertex_initial_wallet', currentInitialWallet); } catch (e) {}
+          } else if (settings && settings.wallet_balance_usd !== undefined && settings.wallet_balance_usd > 0) {
+            currentInitialWallet = parseFloat(settings.wallet_balance_usd);
+            try { localStorage.setItem('vertex_initial_wallet', currentInitialWallet); } catch (e) {}
+          }
+
+          // Atualiza saldo em tempo real na carteira e no modal de ajustes
+          if (wallet_balance_usd !== undefined && wallet_balance_usd !== null) {
+            updateWalletDisplay(wallet_balance_usd, currentInitialWallet, currentActiveCapital);
+          }
+        }
+      } catch (err) {
+        console.error('Erro ao buscar status do bot:', err);
+      }
+    }
+
+    async function executeStartBot() {
+      try {
+        showToast('Iniciando o bot...', 'info');
+        const res = await fetch('/api/bot/start', { method: 'POST' });
+        if (!res.ok) {
+          const errText = await res.text();
+          if (res.status === 404) {
+            showToast('O servidor do Dashboard precisa ser reiniciado no terminal para carregar o novo botão e rota /api/bot/start.', 'warning');
+          } else {
+            showToast(`Erro do servidor (${res.status}): ${errText.slice(0, 80)}`, 'error');
+          }
+          return;
+        }
+        const json = await res.json();
+        if (json.status === 'success' || json.status === 'info') {
+          showToast(json.message || 'Bot iniciado com sucesso!', 'success');
+          await fetchBotStatus();
+          refreshAll();
+        } else {
+          showToast(json.message || 'Falha ao iniciar bot.', 'error');
+        }
+      } catch (err) {
+        showToast('Erro de comunicação: ' + err, 'error');
+      }
+    }
+
+    async function togglePauseBot() {
+      try {
+        const isPaused = currentBotStatus && currentBotStatus.is_paused;
+        const endpoint = isPaused ? '/api/bot/resume' : '/api/bot/pause';
+        const res = await fetch(endpoint, { method: 'POST' });
+        const json = await res.json();
+        if (json.status === 'success') {
+          showToast(json.message || (isPaused ? 'Bot retomado!' : 'Bot pausado!'), 'info');
+          await fetchBotStatus();
+          refreshAll();
+        } else {
+          showToast(json.message || 'Falha ao alterar estado do bot', 'error');
+        }
+      } catch (err) {
+        showToast('Erro de comunicação: ' + err, 'error');
+      }
+    }
 
     function switchTab(tabId) {
       currentTab = tabId;
@@ -309,19 +1325,19 @@
           const scanner = json.data.scanner;
 
           const pnlVal = pnl.total_pnl_usd || 0.0;
-          const initialWallet = pnl.initial_wallet_usd || 5.0;
-          const currentEquity = pnl.current_equity_usd || (initialWallet + pnlVal);
-          const equityGrowthPct = ((currentEquity - initialWallet) / initialWallet * 100.0).toFixed(1);
+          const initialWallet = pnl.initial_wallet_usd !== undefined ? pnl.initial_wallet_usd : (currentInitialWallet || 10.0);
+          const activeCap = pnl.active_capital_usd !== undefined ? parseFloat(pnl.active_capital_usd) : 0.0;
 
-          const equityEl = document.getElementById('kpi-equity');
-          equityEl.textContent = '$' + currentEquity.toFixed(2);
-          equityEl.className = 'text-2xl font-bold ' + (pnlVal > 0 ? 'text-brand-500' : pnlVal < 0 ? 'text-rose-500' : 'text-gray-200');
+          // Saldo da Carteira em tempo real (reflete saídas para alocações e retornos de vendas)
+          let cashVal = pnl.current_cash_usd;
+          if (cashVal === undefined || cashVal === null) {
+            cashVal = Math.max(0.0, (pnl.current_equity_usd || initialWallet) - activeCap);
+          }
+          if (currentBotStatus && typeof currentBotStatus.wallet_balance_usd === 'number' && currentBotStatus.wallet_balance_usd >= 0) {
+            cashVal = currentBotStatus.wallet_balance_usd;
+          }
 
-          const badgeEl = document.getElementById('kpi-equity-badge');
-          badgeEl.textContent = (equityGrowthPct >= 0 ? '+' : '') + equityGrowthPct + '%';
-          badgeEl.className = 'text-xs px-2 py-0.5 rounded font-semibold ' + (pnlVal >= 0 ? 'bg-brand-900/40 text-brand-400' : 'bg-rose-900/40 text-rose-400');
-
-          document.getElementById('kpi-equity-sub').textContent = 'Inicial: $' + initialWallet.toFixed(2) + ' | Lucro: ' + (pnlVal >= 0 ? '+$' : '-$') + Math.abs(pnlVal).toFixed(2);
+          updateWalletDisplay(cashVal, initialWallet, activeCap);
 
           const pnlEl = document.getElementById('kpi-pnl');
           pnlEl.textContent = (pnlVal >= 0 ? '+$' : '-$') + Math.abs(pnlVal).toFixed(2);
@@ -329,14 +1345,15 @@
 
           document.getElementById('kpi-trades-count').textContent = (pnl.closed_positions || 0) + ' trades fechados';
 
-          document.getElementById('kpi-active-pos').textContent = (pnl.active_positions || 0) + ' / 2 slots';
-          document.getElementById('kpi-allocated').textContent = '$' + (pnl.total_allocated_usd || 0.0).toFixed(2) + ' alocados';
+          document.getElementById('kpi-active-pos').textContent = (pnl.active_positions || 0) + ' / ' + currentMaxSlots + ' slots';
+          document.getElementById('kpi-allocated').textContent = '$' + activeCap.toFixed(2) + ' alocados | $' + parseFloat(cashVal).toFixed(2) + ' caixa';
 
           document.getElementById('kpi-break-evens').textContent = pnl.break_evens || 0;
 
           document.getElementById('kpi-tokens-total').textContent = scanner.total_scanned || 0;
           document.getElementById('kpi-tokens-appr').textContent = (scanner.approved || 0) + ' aprovados (' + (scanner.approval_rate_pct || 0.0).toFixed(1) + '%)';
-          document.getElementById('kpi-tokens-rej').textContent = (scanner.rejected || 0) + ' rejeitados por Hard Gates';
+          const totalDb = scanner.all_time_cataloged !== undefined ? ' (' + scanner.all_time_cataloged + ' no banco)' : '';
+          document.getElementById('kpi-tokens-rej').textContent = (scanner.rejected || 0) + ' rejeitados nesta sessão' + totalDb;
 
           renderAnalytics(scanner.rejection_reasons || {}, scanner.rejected || 0);
         }
@@ -347,58 +1364,195 @@
 
     async function fetchPositions() {
       try {
-        const res = await fetch('/api/positions');
-        const json = await res.json();
-        if (json.status === 'success') {
-          const positions = json.data;
-          document.getElementById('positions-count-badge').textContent = positions.length + ' posições';
-          const tbody = document.getElementById('positions-table-body');
-          if (positions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="10" class="py-8 text-center text-gray-500">Nenhuma posição aberta ou fechada até o momento.</td></tr>';
-            return;
+        const [resOpen, resClosed] = await Promise.all([
+          fetch('/api/positions?status=open&_t=' + Date.now()),
+          fetch('/api/positions?status=closed&_t=' + Date.now())
+        ]);
+        const jsonOpen = await resOpen.json();
+        const jsonClosed = await resClosed.json();
+
+        const rawOpen = jsonOpen.status === 'success' ? jsonOpen.data : [];
+        const rawClosed = jsonClosed.status === 'success' ? jsonClosed.data : [];
+
+        // Filtro estrito: posições com 100% vendido (saldo 0 ou CLOSED/STOPPED) NUNCA ficam nas abertas
+        const openPositions = rawOpen.filter(p => (p.status === 'OPEN' || p.status === 'PARTIALLY_CLOSED') && parseFloat(p.remaining_token_amount !== undefined ? p.remaining_token_amount : '1') > 0);
+        const closedPositions = rawClosed.filter(p => p.status === 'CLOSED' || p.status === 'STOPPED' || parseFloat(p.remaining_token_amount || '1') <= 0);
+
+        // Atualiza badges no cabeçalho das abas
+        const tabOpenBadge = document.getElementById('tab-open-badge');
+        if (tabOpenBadge) tabOpenBadge.textContent = openPositions.length;
+
+        const tabClosedBadge = document.getElementById('tab-closed-badge');
+        if (tabClosedBadge) tabClosedBadge.textContent = closedPositions.length;
+
+        const openCountBadge = document.getElementById('positions-open-count-badge');
+        if (openCountBadge) openCountBadge.textContent = openPositions.length + ' / ' + currentMaxSlots + ' slots';
+
+        const closedCountBadge = document.getElementById('positions-closed-count-badge');
+        if (closedCountBadge) closedCountBadge.textContent = closedPositions.length + ' posições encerradas';
+
+        // 1. Renderiza Tabela de Posições Abertas
+        const tbodyOpen = document.getElementById('positions-open-table-body');
+        if (tbodyOpen) {
+          if (openPositions.length === 0) {
+            tbodyOpen.innerHTML = '<tr><td colspan="11" class="py-8 text-center text-gray-500">Nenhuma posição aberta no momento (0/' + currentMaxSlots + ' slots ocupados).</td></tr>';
+          } else {
+            tbodyOpen.innerHTML = openPositions.map(p => {
+              const pnl = p.realized_pnl_usd || 0.0;
+              const pnlColor = pnl > 0 ? 'text-brand-500' : pnl < 0 ? 'text-rose-500' : 'text-gray-400';
+              const isSwing = (p.strategy_type === 'SWING');
+
+              const stratBadge = isSwing
+                ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-950 text-purple-300 border border-purple-500/40">🌊 SWING</span>'
+                : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/40">⚡ SCALP</span>';
+
+              let statusBadge = '';
+              if (isSwing) {
+                const tier = p.ratchet_tier || 0;
+                if (tier === 0) {
+                  statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-800 text-gray-400 border border-gray-700">DEGRAU 0 (ALVO 2X)</span>';
+                } else if (tier === 1) {
+                  statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/40">DEGRAU 1 (BE TRAVADO)</span>';
+                } else if (tier === 2) {
+                  statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/40">DEGRAU 2 (+100% TRAVADO)</span>';
+                } else if (tier === 3) {
+                  statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-950 text-purple-300 border border-purple-500/40">DEGRAU 3 (+200% TRAVADO)</span>';
+                } else {
+                  statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950 text-amber-300 border border-amber-500/40">DEGRAU ${tier} (+400%+)</span>`;
+                }
+              } else {
+                statusBadge = p.status === 'OPEN' 
+                  ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/60 text-emerald-400 border border-emerald-500/30">ABERTA (100% CUSTÓDIA)</span>'
+                  : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-900/60 text-amber-400 border border-amber-500/30">50% CUSTÓDIA (MOON BAG)</span>';
+              }
+
+              let stopFloorHtml = '';
+              if (isSwing && p.ratchet_floor_price && parseFloat(p.ratchet_floor_price) > 0) {
+                stopFloorHtml = `<span class="text-emerald-400 font-mono font-bold" title="Piso Protegido da Catraca">$${parseFloat(p.ratchet_floor_price).toFixed(6)}</span>`;
+              } else {
+                stopFloorHtml = `<span class="text-amber-400 font-mono">$${parseFloat(p.trailing_stop_price).toFixed(6)}</span>`;
+              }
+
+              let targetBeHtml = '';
+              if (isSwing) {
+                targetBeHtml = (p.ratchet_tier && p.ratchet_tier >= 1)
+                  ? '<span class="text-purple-400 font-semibold">✓ Catraca Ativa (100%)</span>'
+                  : '<span class="text-gray-500 font-mono">Alvo 2x (Ativar BE)</span>';
+              } else {
+                targetBeHtml = p.break_even_triggered 
+                  ? '<span class="text-brand-500 font-semibold">✓ 50% Vendido (BE)</span>' 
+                  : '<span class="text-gray-500 font-mono">Pendente (+100%)</span>';
+              }
+
+              const shortAddr = p.token_address.slice(0, 4) + '...' + p.token_address.slice(-4);
+              const dateStr = p.opened_at ? new Date(p.opened_at).toLocaleTimeString() : '-';
+              const displaySymbol = p.symbol || shortAddr;
+              const displayName = p.name ? `<span class="text-[10px] text-gray-400 font-normal truncate max-w-[120px]">(${p.name})</span>` : '';
+              const tokenLinkHtml = `
+                <a href="https://dexscreener.com/solana/${p.token_address}" target="_blank" rel="noopener noreferrer" class="group inline-flex items-center space-x-1.5 hover:opacity-90 transition" title="Abrir gráfico no DexScreener">
+                  <span class="font-bold text-brand-400 group-hover:text-brand-300 group-hover:underline">${displaySymbol}</span>
+                  ${displayName}
+                  <span class="text-[11px] text-brand-500/70 group-hover:text-brand-400">↗</span>
+                </a>
+              `;
+
+              return `
+                <tr class="hover:bg-dark-700/40 transition">
+                  <td class="py-3 px-4 font-bold text-gray-400">#${p.id}</td>
+                  <td class="py-3 px-4" title="${p.token_address}">
+                    ${tokenLinkHtml}
+                    <div class="text-[10px] font-mono text-gray-500">${shortAddr}</div>
+                  </td>
+                  <td class="py-3 px-4">${stratBadge}</td>
+                  <td class="py-3 px-4">${statusBadge}</td>
+                  <td class="py-3 px-4 font-mono">$${parseFloat(p.entry_price).toFixed(6)}</td>
+                  <td class="py-3 px-4 text-emerald-400 font-mono">$${parseFloat(p.highest_price_seen).toFixed(6)}</td>
+                  <td class="py-3 px-4 font-mono">${stopFloorHtml}</td>
+                  <td class="py-3 px-4">
+                    <span class="px-2 py-0.5 rounded bg-blue-950/60 border border-blue-500/30 text-blue-400 font-bold font-mono">
+                      $${parseFloat(p.allocated_capital_usd).toFixed(2)}
+                    </span>
+                  </td>
+                  <td class="py-3 px-4 font-bold font-mono ${pnlColor}">$${parseFloat(pnl).toFixed(2)}</td>
+                  <td class="py-3 px-4">${targetBeHtml}</td>
+                  <td class="py-3 px-4 text-gray-400 font-mono">${dateStr}</td>
+                </tr>
+              `;
+            }).join('');
           }
+        }
 
-          tbody.innerHTML = positions.map(p => {
-            const pnl = p.realized_pnl_usd || 0.0;
-            const pnlColor = pnl > 0 ? 'text-brand-500' : pnl < 0 ? 'text-rose-500' : 'text-gray-400';
-            const statusBadge = p.status === 'OPEN' 
-              ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/60 text-emerald-400 border border-emerald-500/30">OPEN</span>'
-              : p.status === 'PARTIALLY_CLOSED'
-              ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-900/60 text-amber-400 border border-amber-500/30">PARTIAL</span>'
-              : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-800 text-gray-400">CLOSED</span>';
+        // 2. Renderiza Tabela de Posições Fechadas (100% Vendidas)
+        const tbodyClosed = document.getElementById('positions-closed-table-body');
+        if (tbodyClosed) {
+          if (closedPositions.length === 0) {
+            tbodyClosed.innerHTML = '<tr><td colspan="12" class="py-8 text-center text-gray-500">Nenhuma posição encerrada até o momento.</td></tr>';
+          } else {
+            tbodyClosed.innerHTML = closedPositions.map(p => {
+              const pnl = p.realized_pnl_usd || 0.0;
+              const pnlColor = pnl > 0 ? 'text-brand-500' : pnl < 0 ? 'text-rose-500' : 'text-gray-400';
+              const pnlPrefix = pnl > 0 ? '+$' : pnl < 0 ? '-$' : '$';
+              const isSwing = (p.strategy_type === 'SWING');
 
-            const beBadge = p.break_even_triggered 
-              ? '<span class="text-brand-500 font-semibold">✓ 50% Vendido</span>' 
-              : '<span class="text-gray-500">-</span>';
+              const stratBadge = isSwing
+                ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-950 text-purple-300 border border-purple-500/40">🌊 SWING</span>'
+                : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/40">⚡ SCALP</span>';
 
-            const shortAddr = p.token_address.slice(0, 4) + '...' + p.token_address.slice(-4);
-            const dateStr = p.opened_at ? new Date(p.opened_at).toLocaleTimeString() : '-';
-            const symbolHtml = p.symbol 
-              ? `<div class="font-bold text-gray-100 flex items-center space-x-1.5"><span class="text-brand-400">${p.symbol}</span>${p.name ? `<span class="text-[10px] text-gray-400 font-normal truncate max-w-[120px]">(${p.name})</span>` : ''}</div>`
-              : `<div class="font-bold text-gray-300">Desconhecido</div>`;
+              const statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-900/60 text-rose-300 border border-rose-500/40">100% VENDIDO</span>';
 
-            return `
-              <tr class="hover:bg-dark-700/40 transition">
-                <td class="py-3 px-4 font-bold text-gray-400">#${p.id}</td>
-                <td class="py-3 px-4" title="${p.token_address}">
-                  ${symbolHtml}
-                  <div class="text-[10px] font-mono text-gray-500">${shortAddr}</div>
-                </td>
-                <td class="py-3 px-4">${statusBadge}</td>
-                <td class="py-3 px-4">$${parseFloat(p.entry_price).toFixed(6)}</td>
-                <td class="py-3 px-4 text-emerald-400">$${parseFloat(p.highest_price_seen).toFixed(6)}</td>
-                <td class="py-3 px-4 text-amber-400">$${parseFloat(p.trailing_stop_price).toFixed(6)}</td>
-                <td class="py-3 px-4">
-                  <span class="px-2 py-0.5 rounded bg-blue-950/60 border border-blue-500/30 text-blue-400 font-bold font-mono">
-                    $${parseFloat(p.allocated_capital_usd).toFixed(2)}
-                  </span>
-                </td>
-                <td class="py-3 px-4 font-bold ${pnlColor}">$${parseFloat(pnl).toFixed(2)}</td>
-                <td class="py-3 px-4">${beBadge}</td>
-                <td class="py-3 px-4 text-gray-400">${dateStr}</td>
-              </tr>
-            `;
-          }).join('');
+              let reasonBadge = '';
+              if (isSwing) {
+                if (p.status === 'STOPPED') {
+                  reasonBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800">SWING STOP LOSS</span>';
+                } else {
+                  reasonBadge = `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-950 text-purple-300 border border-purple-800">CATRACA DEGRAU #${p.ratchet_tier || 1}</span>`;
+                }
+              } else {
+                reasonBadge = p.status === 'STOPPED'
+                  ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800">STOP LOSS (-20%)</span>'
+                  : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950 text-blue-400 border border-blue-800">TRAILING STOP (-12%)</span>';
+              }
+
+              const shortAddr = p.token_address.slice(0, 4) + '...' + p.token_address.slice(-4);
+              const openDateStr = p.opened_at ? new Date(p.opened_at).toLocaleTimeString() : '-';
+              const closeDateStr = p.closed_at ? new Date(p.closed_at).toLocaleTimeString() : '-';
+              const exitPrice = p.trailing_stop_price ? parseFloat(p.trailing_stop_price).toFixed(6) : '-';
+
+              const displaySymbol = p.symbol || shortAddr;
+              const displayName = p.name ? `<span class="text-[10px] text-gray-400 font-normal truncate max-w-[120px]">(${p.name})</span>` : '';
+              const tokenLinkHtml = `
+                <a href="https://dexscreener.com/solana/${p.token_address}" target="_blank" rel="noopener noreferrer" class="group inline-flex items-center space-x-1.5 hover:opacity-90 transition" title="Abrir gráfico no DexScreener">
+                  <span class="font-bold text-brand-400 group-hover:text-brand-300 group-hover:underline">${displaySymbol}</span>
+                  ${displayName}
+                  <span class="text-[11px] text-brand-500/70 group-hover:text-brand-400">↗</span>
+                </a>
+              `;
+
+              return `
+                <tr class="hover:bg-dark-700/40 transition">
+                  <td class="py-3 px-4 font-bold text-gray-400">#${p.id}</td>
+                  <td class="py-3 px-4" title="${p.token_address}">
+                    ${tokenLinkHtml}
+                    <div class="text-[10px] font-mono text-gray-500">${shortAddr}</div>
+                  </td>
+                  <td class="py-3 px-4">${stratBadge}</td>
+                  <td class="py-3 px-4">${statusBadge}</td>
+                  <td class="py-3 px-4">${reasonBadge}</td>
+                  <td class="py-3 px-4 font-mono">$${parseFloat(p.entry_price).toFixed(6)}</td>
+                  <td class="py-3 px-4 text-emerald-400 font-mono">$${parseFloat(p.highest_price_seen).toFixed(6)}</td>
+                  <td class="py-3 px-4 text-amber-400 font-mono">$${exitPrice}</td>
+                  <td class="py-3 px-4">
+                    <span class="px-2 py-0.5 rounded bg-dark-700 text-gray-300 font-bold font-mono">
+                      $${parseFloat(p.allocated_capital_usd).toFixed(2)}
+                    </span>
+                  </td>
+                  <td class="py-3 px-4 font-bold font-mono ${pnlColor}">${pnlPrefix}${Math.abs(parseFloat(pnl)).toFixed(2)}</td>
+                  <td class="py-3 px-4 text-gray-400 font-mono">${openDateStr}</td>
+                  <td class="py-3 px-4 text-gray-300 font-mono font-medium">${closeDateStr}</td>
+                </tr>
+              `;
+            }).join('');
+          }
         }
       } catch (err) {
         console.error('Erro ao buscar posições:', err);
@@ -426,7 +1580,16 @@
               : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-900/60 text-rose-400 border border-rose-500/30">REJEITADO</span>';
 
             const shortAddr = t.address.slice(0, 6) + '...' + t.address.slice(-6);
-            const tokenLabel = t.symbol ? `${t.symbol} (${shortAddr})` : shortAddr;
+            const displaySymbol = t.symbol || shortAddr;
+            const displayName = t.name ? `<span class="text-[10px] text-gray-400 font-normal truncate max-w-[140px]">(${t.name})</span>` : '';
+            const tokenLinkHtml = `
+              <a href="https://dexscreener.com/solana/${t.address}" target="_blank" rel="noopener noreferrer" class="group inline-flex items-center space-x-1.5 hover:opacity-90 transition" title="Abrir gráfico no DexScreener">
+                <span class="font-bold text-brand-400 group-hover:text-brand-300 group-hover:underline">${displaySymbol}</span>
+                ${displayName}
+                <span class="text-[11px] text-brand-500/70 group-hover:text-brand-400">↗</span>
+              </a>
+              <div class="text-[10px] font-mono text-gray-500">${shortAddr}</div>
+            `;
             const liq = t.initial_liquidity_usd ? '$' + parseFloat(t.initial_liquidity_usd).toFixed(2) : '-';
             const reason = t.rejection_reason ? `<span class="text-rose-300 font-medium">${t.rejection_reason}</span>` : '<span class="text-brand-400 font-medium">Aprovado em todos os Hard Gates</span>';
             const dateStr = t.detection_timestamp ? new Date(t.detection_timestamp).toLocaleTimeString() : '-';
@@ -434,7 +1597,7 @@
             return `
               <tr class="hover:bg-dark-700/40 transition">
                 <td class="py-3 px-4">${badge}</td>
-                <td class="py-3 px-4 font-mono font-medium text-gray-200" title="${t.address}">${tokenLabel}</td>
+                <td class="py-3 px-4" title="${t.address}">${tokenLinkHtml}</td>
                 <td class="py-3 px-4 uppercase text-gray-400">${t.dex || 'raydium'}</td>
                 <td class="py-3 px-4 text-gray-300">${liq}</td>
                 <td class="py-3 px-4 max-w-md truncate" title="${t.rejection_reason || ''}">${reason}</td>
@@ -484,6 +1647,70 @@
       }
     }
 
+    async function fetchWaitingTokens() {
+      try {
+        const res = await fetch('/api/waiting_tokens');
+        const json = await res.json();
+        if (json.status === 'success') {
+          const tokens = json.data || [];
+          const countBadge = document.getElementById('waiting-count-badge');
+          if (countBadge) countBadge.textContent = tokens.length + ' tokens na fila';
+          const tabBadge = document.getElementById('tab-waiting-badge');
+          if (tabBadge) tabBadge.textContent = tokens.length;
+          const filterBadge = document.getElementById('waiting-filter-badge');
+          if (filterBadge) filterBadge.textContent = tokens.length;
+
+          const tbody = document.getElementById('waiting-table-body');
+          if (!tbody) return;
+
+          if (tokens.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="py-8 text-center text-gray-500">Nenhum token na fila de espera no momento. Todos os aprovados foram executados ou estão em monitoramento.</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = tokens.map((t, idx) => {
+            const shortAddr = t.address.slice(0, 6) + '...' + t.address.slice(-6);
+            const displaySymbol = t.symbol || shortAddr;
+            const displayName = t.name && t.name !== 'N/A' ? `<span class="text-[10px] text-gray-400 font-normal truncate max-w-[130px]">(${t.name})</span>` : '';
+            const tokenLinkHtml = `
+              <a href="https://dexscreener.com/solana/${t.address}" target="_blank" rel="noopener noreferrer" class="group inline-flex items-center space-x-1.5 hover:opacity-90 transition" title="Abrir gráfico no DexScreener">
+                <span class="font-bold text-brand-400 group-hover:text-brand-300 group-hover:underline">${displaySymbol}</span>
+                ${displayName}
+                <span class="text-[11px] text-brand-500/70 group-hover:text-brand-400">↗</span>
+              </a>
+              <div class="text-[10px] font-mono text-gray-500">${shortAddr}</div>
+            `;
+            const liq = t.initial_liquidity_usd ? '$' + parseFloat(t.initial_liquidity_usd).toFixed(2) : '-';
+            const price = t.last_price ? '$' + parseFloat(t.last_price).toFixed(6) : '-';
+            const isSlots = t.waiting_reason === 'AGUARDANDO_SLOT';
+            const reasonBadge = isSlots
+              ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-900/60 text-amber-300 border border-amber-500/30">⏳ SLOTS ESGOTADOS</span>'
+              : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-900/60 text-blue-300 border border-blue-500/30">💰 AGUARDANDO SALDO</span>';
+            const dateStr = t.enqueued_at ? new Date(t.enqueued_at).toLocaleTimeString() : '-';
+
+            return `
+              <tr class="hover:bg-dark-700/40 transition">
+                <td class="py-3 px-4 font-mono font-bold text-amber-400">#${idx + 1}</td>
+                <td class="py-3 px-4" title="${t.address}">${tokenLinkHtml}</td>
+                <td class="py-3 px-4 uppercase text-gray-400">${t.dex || 'raydium'}</td>
+                <td class="py-3 px-4 text-gray-300">${liq}</td>
+                <td class="py-3 px-4">${reasonBadge}</td>
+                <td class="py-3 px-4 font-mono text-gray-200">${price}</td>
+                <td class="py-3 px-4 text-gray-500">${dateStr}</td>
+                <td class="py-3 px-4">
+                  <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-900/50 text-emerald-300 border border-emerald-500/30">
+                    🟢 Prioritário na liberação de vaga
+                  </span>
+                </td>
+              </tr>
+            `;
+          }).join('');
+        }
+      } catch (err) {
+        console.error('Erro ao buscar tokens na fila de espera:', err);
+      }
+    }
+
     function renderAnalytics(reasons, totalRejected) {
       const container = document.getElementById('rejection-breakdown-list');
       const entries = Object.entries(reasons);
@@ -521,18 +1748,242 @@
       searchDebounce = setTimeout(fetchTokens, 300);
     }
 
+    // MODAL: CONFIGURAÇÕES
+    async function openConfigModal() {
+      await fetchBotStatus();
+      if (currentBotStatus && currentBotStatus.settings) {
+        const s = currentBotStatus.settings;
+        const buyInput = document.getElementById('cfg-buy-usd');
+        if (buyInput) buyInput.value = s.paper_buy_amount_usd !== undefined ? s.paper_buy_amount_usd : 1.0;
+        const slotsInput = document.getElementById('cfg-max-slots');
+        if (slotsInput) slotsInput.value = s.max_concurrent_positions || 5;
+        const slipInput = document.getElementById('cfg-slippage');
+        if (slipInput) slipInput.value = s.max_slippage_pct || 1.5;
+        const beInput = document.getElementById('cfg-be-gain');
+        if (beInput) beInput.value = s.break_even_gain_pct || 100.0;
+        const trailInput = document.getElementById('cfg-trailing-drop');
+        if (trailInput) trailInput.value = s.trailing_stop_drop_pct || 12.0;
+        const stopInput = document.getElementById('cfg-stop-loss');
+        if (stopInput) stopInput.value = s.emergency_stop_loss_pct || 20.0;
+        const coolTrailInput = document.getElementById('cfg-cooloff-trailing');
+        if (coolTrailInput) coolTrailInput.value = s.reentry_trailing_cooloff_min || 5.0;
+        const coolStopInput = document.getElementById('cfg-cooloff-stoploss');
+        if (coolStopInput) coolStopInput.value = s.reentry_stoploss_cooloff_min || 30.0;
+        const bounceInput = document.getElementById('cfg-reentry-bounce');
+        if (bounceInput) bounceInput.value = s.reentry_min_bounce_pct || 3.0;
+
+        const stratSelect = document.getElementById('cfg-strategy-mode');
+        if (stratSelect && s.trading_strategy_mode) stratSelect.value = s.trading_strategy_mode;
+        const swingStopInput = document.getElementById('cfg-swing-stop');
+        if (swingStopInput) swingStopInput.value = s.swing_initial_stop_loss_pct !== undefined ? s.swing_initial_stop_loss_pct : 20.0;
+        const tier1Input = document.getElementById('cfg-swing-tier1');
+        if (tier1Input) tier1Input.value = s.swing_tier1_mult !== undefined ? s.swing_tier1_mult : 2.0;
+        const tier2Input = document.getElementById('cfg-swing-tier2');
+        if (tier2Input) tier2Input.value = s.swing_tier2_mult !== undefined ? s.swing_tier2_mult : 3.0;
+        const tier3Input = document.getElementById('cfg-swing-tier3');
+        if (tier3Input) tier3Input.value = s.swing_tier3_mult !== undefined ? s.swing_tier3_mult : 5.0;
+        const swingTrailInput = document.getElementById('cfg-swing-trail');
+        if (swingTrailInput) swingTrailInput.value = s.swing_trailing_drop_pct !== undefined ? s.swing_trailing_drop_pct : 25.0;
+
+        const walletInput = document.getElementById('cfg-wallet-usd');
+        if (walletInput) {
+          const cfgBal = s.wallet_balance_usd !== undefined ? s.wallet_balance_usd : (s.paper_initial_wallet_usd !== undefined ? s.paper_initial_wallet_usd : currentInitialWallet);
+          walletInput.value = cfgBal || currentInitialWallet || 10.0;
+        }
+      }
+      const modal = document.getElementById('config-modal');
+      if (modal) modal.classList.remove('hidden');
+    }
+
+    function closeConfigModal() {
+      const modal = document.getElementById('config-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    async function saveConfig() {
+      try {
+        const payload = {
+          paper_buy_amount_usd: parseFloat(document.getElementById('cfg-buy-usd').value),
+          max_concurrent_positions: parseInt(document.getElementById('cfg-max-slots').value, 10),
+          max_slippage_pct: parseFloat(document.getElementById('cfg-slippage').value),
+          break_even_gain_pct: parseFloat(document.getElementById('cfg-be-gain').value),
+          trailing_stop_drop_pct: parseFloat(document.getElementById('cfg-trailing-drop').value),
+          emergency_stop_loss_pct: parseFloat(document.getElementById('cfg-stop-loss').value),
+          reentry_trailing_cooloff_min: parseFloat(document.getElementById('cfg-cooloff-trailing').value),
+          reentry_stoploss_cooloff_min: parseFloat(document.getElementById('cfg-cooloff-stoploss').value),
+          reentry_min_bounce_pct: parseFloat(document.getElementById('cfg-reentry-bounce').value),
+        };
+
+        const stratMode = document.getElementById('cfg-strategy-mode')?.value;
+        if (stratMode) payload.trading_strategy_mode = stratMode;
+        const swingStop = parseFloat(document.getElementById('cfg-swing-stop')?.value);
+        if (!isNaN(swingStop)) payload.swing_initial_stop_loss_pct = swingStop;
+        const tier1 = parseFloat(document.getElementById('cfg-swing-tier1')?.value);
+        if (!isNaN(tier1)) payload.swing_tier1_mult = tier1;
+        const tier2 = parseFloat(document.getElementById('cfg-swing-tier2')?.value);
+        if (!isNaN(tier2)) payload.swing_tier2_mult = tier2;
+        const tier3 = parseFloat(document.getElementById('cfg-swing-tier3')?.value);
+        if (!isNaN(tier3)) payload.swing_tier3_mult = tier3;
+        const swingTrail = parseFloat(document.getElementById('cfg-swing-trail')?.value);
+        if (!isNaN(swingTrail)) payload.swing_trailing_drop_pct = swingTrail;
+
+        const walletInput = document.getElementById('cfg-wallet-usd');
+        const walletVal = walletInput ? parseFloat(walletInput.value) : NaN;
+        if (!isNaN(walletVal) && walletVal > 0) {
+          payload.wallet_balance_usd = walletVal;
+          payload.paper_initial_wallet_usd = walletVal;
+          currentInitialWallet = walletVal;
+          try { localStorage.setItem('vertex_initial_wallet', currentInitialWallet); } catch (e) {}
+          updateWalletDisplay(currentBotStatus ? currentBotStatus.wallet_balance_usd : walletVal, currentInitialWallet, currentActiveCapital);
+        }
+
+        const res = await fetch('/api/bot/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if (json.status === 'success') {
+          showToast('Configurações salvas e ativas com sucesso!', 'success');
+          closeConfigModal();
+          await fetchBotStatus();
+          refreshAll();
+        } else {
+          showToast(json.message || 'Erro ao salvar configurações', 'error');
+        }
+      } catch (err) {
+        showToast('Erro ao enviar configurações: ' + err, 'error');
+      }
+    }
+
+    // MODAL: REINICIAR
+    function openRestartModal() {
+      const input = document.getElementById('restart-wallet-input');
+      if (input) input.value = currentInitialWallet.toFixed(2);
+      const modal = document.getElementById('restart-modal');
+      if (modal) modal.classList.remove('hidden');
+    }
+
+    function closeRestartModal() {
+      const modal = document.getElementById('restart-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    async function executeRestart() {
+      try {
+        const balanceVal = parseFloat(document.getElementById('restart-wallet-input').value) || currentInitialWallet || 10.0;
+        const res = await fetch('/api/bot/restart', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wallet_balance_usd: balanceVal })
+        });
+        const json = await res.json();
+        if (json.status === 'success') {
+          showToast('Sessão reiniciada! IDs zerados para #1.', 'success');
+          closeRestartModal();
+          currentInitialWallet = balanceVal;
+          try { localStorage.setItem('vertex_initial_wallet', currentInitialWallet); } catch (e) {}
+          currentActiveCapital = 0.0;
+          updateWalletDisplay(balanceVal, balanceVal, 0.0);
+          await fetchBotStatus();
+          refreshAll();
+        } else {
+          showToast(json.message || 'Erro ao reiniciar sessão', 'error');
+        }
+      } catch (err) {
+        showToast('Erro ao solicitar reinício: ' + err, 'error');
+      }
+    }
+
+    // MODAL: DEPÓSITO
+    function openDepositModal() {
+      const modal = document.getElementById('deposit-modal');
+      if (modal) modal.classList.remove('hidden');
+    }
+
+    function closeDepositModal() {
+      const modal = document.getElementById('deposit-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    async function quickDeposit(amount) {
+      try {
+        const res = await fetch('/api/wallet/deposit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount_usd: amount })
+        });
+        const json = await res.json();
+        if (json.status === 'success') {
+          showToast(`+$${amount.toFixed(2)} depositados com sucesso!`, 'success');
+          closeDepositModal();
+          currentInitialWallet += amount;
+          try { localStorage.setItem('vertex_initial_wallet', currentInitialWallet); } catch (e) {}
+          const newBal = json.data && json.data.wallet_balance_usd !== undefined ? json.data.wallet_balance_usd : (currentInitialWallet);
+          updateWalletDisplay(newBal, currentInitialWallet, currentActiveCapital);
+          await fetchBotStatus();
+          refreshAll();
+        } else {
+          showToast(json.message || 'Erro ao realizar depósito', 'error');
+        }
+      } catch (err) {
+        showToast('Erro ao depositar: ' + err, 'error');
+      }
+    }
+
+    async function executeCustomDeposit() {
+      const input = document.getElementById('deposit-custom-input');
+      const val = parseFloat(input ? input.value : '0');
+      if (!val || val <= 0) {
+        showToast('Por favor, informe um valor válido para depósito.', 'warning');
+        return;
+      }
+      await quickDeposit(val);
+      if (input) input.value = '';
+    }
+
+    // MODAL: STOP
+    function openStopModal() {
+      const modal = document.getElementById('stop-modal');
+      if (modal) modal.classList.remove('hidden');
+    }
+
+    function closeStopModal() {
+      const modal = document.getElementById('stop-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    async function executeStop() {
+      try {
+        const res = await fetch('/api/bot/stop', { method: 'POST' });
+        const json = await res.json();
+        showToast(json.message || 'Bot encerrado com sucesso.', 'info');
+        closeStopModal();
+        await fetchBotStatus();
+      } catch (err) {
+        showToast('Erro ao encerrar bot: ' + err, 'error');
+      }
+    }
+
     function refreshCurrentTab() {
-      if (currentTab === 'positions') fetchPositions();
+      if (currentTab === 'positions' || currentTab === 'positions-closed') fetchPositions();
+      else if (currentTab === 'waiting') fetchWaitingTokens();
       else if (currentTab === 'tokens') fetchTokens();
       else if (currentTab === 'orders') fetchOrders();
     }
 
     function refreshAll() {
-      fetchSummary();
-      refreshCurrentTab();
+      fetchBotStatus();
+      if (currentSidebarNav === 'simulacao') {
+        fetchSummary();
+        fetchWaitingTokens();
+        refreshCurrentTab();
+      }
     }
 
     // Inicialização
+    const savedNav = localStorage.getItem('vertex_active_sidebar');
+    switchSidebarNav(savedNav && SIDEBAR_NAV_TITLES[savedNav] ? savedNav : 'simulacao');
     refreshAll();
     setRefreshInterval(2000);
   </script>
