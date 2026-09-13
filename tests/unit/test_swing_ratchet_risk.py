@@ -114,6 +114,56 @@ def test_swing_emergency_stop_before_tier1():
     assert amount == Decimal("50.00")
 
 
+def test_swing_zero_initial_stop_loss_allows_unlimited_dip_pre_tier1():
+    """Valida que quando o stop loss inicial do Swing é 0%, a posição tolera quedas profundas sem sair."""
+    entry_price = Decimal("1.00")
+    pos = PositionState(
+        token_address="SwingMoonbag111",
+        mode=ExecutionMode.PAPER,
+        strategy_type="SWING",
+        entry_price=entry_price,
+        initial_token_amount=Decimal("100.00"),
+        allocated_capital_usd=Decimal("100.00"),
+    )
+
+    assert pos.trailing_stop_price == Decimal("0.0")
+
+    risk = RiskManager(
+        swing_initial_stop_loss_pct=Decimal("0.0"),  # Stop loss inicial desativado!
+        swing_tier1_mult=Decimal("2.0"),
+    )
+
+    # Tick 0 no preço de entrada (ou leve spread abaixo devido a slippage) -> Não sai!
+    decision = risk.evaluate_price_tick(pos, Decimal("0.99"))
+    assert decision is None
+    assert pos.trailing_stop_price == Decimal("0.0")
+
+    # Queda de -50% (cotação a 0.50) -> Não sai!
+    decision = risk.evaluate_price_tick(pos, Decimal("0.50"))
+    assert decision is None
+    assert pos.ratchet_tier == 0
+    assert pos.trailing_stop_price == Decimal("0.0")
+
+    # Queda de -80% (cotação a 0.20) -> Não sai!
+    decision = risk.evaluate_price_tick(pos, Decimal("0.20"))
+    assert decision is None
+    assert pos.remaining_token_amount == Decimal("100.00")
+
+    # Recuperação estrondosa para 2.00 (Degrau 1 / 2x):
+    decision = risk.evaluate_price_tick(pos, Decimal("2.00"))
+    assert decision is None
+    assert pos.ratchet_tier == 1
+    assert pos.ratchet_floor_price == Decimal("1.00")
+    assert pos.trailing_stop_price == Decimal("1.00")
+
+    # Agora que alcançou Degrau 1, se cair para 0.95 (abaixo do piso garantido de 1.00), encerra a posição no BE!
+    decision = risk.evaluate_price_tick(pos, Decimal("0.95"))
+    assert decision is not None
+    action, amount = decision
+    assert action == "SWING_RATCHET_STOP"
+    assert amount == Decimal("100.00")
+
+
 def test_dual_track_coexistence():
     """Valida a coexistência simultânea de uma posição SCALP e uma posição SWING no mesmo par."""
     entry_price = Decimal("1.00")
@@ -145,12 +195,12 @@ def test_dual_track_coexistence():
     )
 
     # Cotação vai para 2.00 (2x / +100%)
-    # 1. SCALP: deve disparar BREAK_EVEN vendendo 50% dos tokens (25 tokens)
+    # 1. SCALP: deve disparar SCALP_TARGET_REACHED vendendo 100% dos tokens (50 tokens)
     decision_scalp = risk.evaluate_price_tick(pos_scalp, Decimal("2.00"))
     assert decision_scalp is not None
     action_scalp, amount_scalp = decision_scalp
-    assert action_scalp == "BREAK_EVEN"
-    assert amount_scalp == Decimal("25.00")
+    assert action_scalp == "SCALP_TARGET_REACHED"
+    assert amount_scalp == Decimal("50.00")
 
     # 2. SWING: NÃO vende! Apenas eleva o piso da catraca para o preço de entrada
     decision_swing = risk.evaluate_price_tick(pos_swing, Decimal("2.00"))

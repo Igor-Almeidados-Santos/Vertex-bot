@@ -125,6 +125,7 @@ class PaperExecutionEngine(IExecutionEngine):
         self.balance_usd -= amount_usd
 
         # Inicializa estado da posição com o tipo de estratégia (SCALP ou SWING)
+        is_swing = (strategy_type == "SWING")
         position = PositionState(
             token_address=token.address,
             mode=ExecutionMode.PAPER,
@@ -132,7 +133,8 @@ class PaperExecutionEngine(IExecutionEngine):
             entry_price=execution_price,
             initial_token_amount=tokens_received,
             allocated_capital_usd=amount_usd,
-            trailing_drop_pct=self.trailing_drop_pct,
+            trailing_drop_pct=Decimal("0.0") if is_swing else self.trailing_drop_pct,
+            trailing_stop_price=Decimal("0.0") if is_swing else execution_price * (Decimal("1.0") - self.trailing_drop_pct),
             status=PositionStatus.OPEN,
         )
 

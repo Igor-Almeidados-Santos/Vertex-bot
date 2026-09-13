@@ -25,6 +25,7 @@ from src.engine.risk import RiskManager
 from src.engine.tracker import PositionTracker
 from src.scanner.client import ResilientRPCClient
 from src.scanner.listener import create_scanner
+from src.security.market_dynamics import MarketDynamicsValidator
 from src.security.validator import SecurityValidator
 from src.utils.logger import setup_logger
 from src.utils.metrics import TelemetryCollector
@@ -54,12 +55,26 @@ class VertexBotOrchestrator:
         )
 
         # Camada de Segurança
+        # Camada de Segurança e Dinâmica de Mercado
+        self.market_validator: MarketDynamicsValidator = MarketDynamicsValidator(
+            min_volume_1h_usd=settings.MIN_VOLUME_1H_USD,
+            min_buy_ratio_5m_pct=settings.MIN_BUY_RATIO_5M_PCT,
+            min_price_change_5m_pct=settings.MIN_PRICE_CHANGE_5M_PCT,
+            min_age_hours_scalp=float(settings.MIN_TOKEN_AGE_HOURS_SCALP),
+            max_age_hours_scalp=float(settings.MAX_TOKEN_AGE_HOURS_SCALP),
+            min_age_hours_swing=float(settings.MIN_TOKEN_AGE_HOURS_SWING),
+            max_age_hours_swing=float(settings.MAX_TOKEN_AGE_HOURS_SWING),
+            min_liquidity_scalp_usd=settings.MIN_LIQUIDITY_USD,
+            min_liquidity_swing_usd=settings.MIN_LIQUIDITY_SWING_USD,
+        )
         self.validator: SecurityValidator = SecurityValidator(
             tokens_repo=self.tokens_repo,
             rpc_client=self.rpc_client,
             min_liquidity_usd=settings.MIN_LIQUIDITY_USD,
             max_top10_pct=float(settings.MAX_TOP10_HOLDERS_PCT),
             max_tax_pct=float(settings.MAX_BUY_TAX_PCT),
+            market_validator=self.market_validator,
+            strategy_mode=settings.TRADING_STRATEGY_MODE,
         )
 
         # Camada de Execução (Paper Trading por padrão)
@@ -74,7 +89,11 @@ class VertexBotOrchestrator:
 
         # Gestão de Risco
         self.risk_manager: RiskManager = RiskManager(
-            break_even_gain_pct=settings.BREAK_EVEN_GAIN_PCT,
+            scalp_max_hold_seconds=float(getattr(settings, "SCALP_MAX_HOLD_MINUTES", 60.0)) * 60.0,
+            scalp_target_gain_pct=getattr(settings, "SCALP_TARGET_GAIN_PCT", Decimal("100.0")),
+            swing_max_hold_seconds=float(getattr(settings, "SWING_MAX_HOLD_HOURS", 24.0)) * 3600.0,
+            swing_target_gain_pct=getattr(settings, "SWING_TARGET_GAIN_PCT", Decimal("2000.0")),
+            swing_max_hourly_drop_pct=getattr(settings, "SWING_MAX_HOURLY_DROP_PCT", Decimal("15.0")),
             trailing_drop_pct=settings.TRAILING_STOP_DROP_PCT / Decimal("100.0"),
             emergency_stop_loss_pct=settings.EMERGENCY_STOP_LOSS_PCT / Decimal("100.0"),
             swing_initial_stop_loss_pct=settings.SWING_INITIAL_STOP_LOSS_PCT / Decimal("100.0"),
@@ -82,7 +101,9 @@ class VertexBotOrchestrator:
             swing_tier2_mult=settings.SWING_TIER2_TARGET_MULT,
             swing_tier3_mult=settings.SWING_TIER3_TARGET_MULT,
             swing_tier4_mult=settings.SWING_TIER4_TARGET_MULT,
+            swing_tier5_mult=getattr(settings, "SWING_TIER5_TARGET_MULT", Decimal("21.0")),
             swing_trailing_drop_pct=settings.SWING_TRAILING_DROP_PCT / Decimal("100.0"),
+            break_even_gain_pct=settings.BREAK_EVEN_GAIN_PCT,
         )
         self.position_tracker: PositionTracker = PositionTracker(
             engine=self.execution_engine,
@@ -194,6 +215,7 @@ class VertexBotOrchestrator:
                 "max_concurrent_positions": int(self.settings.MAX_CONCURRENT_POSITIONS),
                 "wallet_balance_usd": float(self.execution_engine.balance_usd),
                 "min_trade_amount_usd": float(self.settings.MIN_TRADE_AMOUNT_USD),
+                "max_token_age_hours": float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS", 3.0)),
                 "break_even_gain_pct": float(self.settings.BREAK_EVEN_GAIN_PCT),
                 "trailing_stop_drop_pct": float(self.settings.TRAILING_STOP_DROP_PCT),
                 "emergency_stop_loss_pct": float(self.settings.EMERGENCY_STOP_LOSS_PCT),
@@ -202,12 +224,24 @@ class VertexBotOrchestrator:
                 "reentry_stoploss_cooloff_min": float(self.settings.REENTRY_STOPLOSS_COOLOFF_SEC) / 60.0,
                 "reentry_min_bounce_pct": float(self.settings.REENTRY_MIN_BOUNCE_PCT),
                 "trading_strategy_mode": str(self.settings.TRADING_STRATEGY_MODE),
+                "scalp_max_hold_minutes": float(getattr(self.settings, "SCALP_MAX_HOLD_MINUTES", 60.0)),
+                "scalp_target_gain_pct": float(getattr(self.settings, "SCALP_TARGET_GAIN_PCT", 100.0)),
+                "swing_max_hold_hours": float(getattr(self.settings, "SWING_MAX_HOLD_HOURS", 24.0)),
+                "swing_target_gain_pct": float(getattr(self.settings, "SWING_TARGET_GAIN_PCT", 2000.0)),
+                "swing_max_hourly_drop_pct": float(getattr(self.settings, "SWING_MAX_HOURLY_DROP_PCT", 15.0)),
                 "swing_initial_stop_loss_pct": float(self.settings.SWING_INITIAL_STOP_LOSS_PCT),
                 "swing_tier1_mult": float(self.settings.SWING_TIER1_TARGET_MULT),
                 "swing_tier2_mult": float(self.settings.SWING_TIER2_TARGET_MULT),
                 "swing_tier3_mult": float(self.settings.SWING_TIER3_TARGET_MULT),
                 "swing_tier4_mult": float(self.settings.SWING_TIER4_TARGET_MULT),
+                "swing_tier5_mult": float(getattr(self.settings, "SWING_TIER5_TARGET_MULT", 21.0)),
                 "swing_trailing_drop_pct": float(self.settings.SWING_TRAILING_DROP_PCT),
+                "min_token_age_scalp_min": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)) * 60.0,
+                "min_token_age_swing_hours": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)),
+                "min_volume_1h_usd": float(getattr(self.settings, "MIN_VOLUME_1H_USD", 15000.0)),
+                "min_buy_ratio_5m_pct": float(getattr(self.settings, "MIN_BUY_RATIO_5M_PCT", 50.0)),
+                "min_price_change_5m_pct": float(getattr(self.settings, "MIN_PRICE_CHANGE_5M_PCT", -2.0)),
+                "min_liquidity_swing_usd": float(getattr(self.settings, "MIN_LIQUIDITY_SWING_USD", 20000.0)),
             }
             cfg_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             logger.info("💾 Configurações persistidas salvas em data/bot_config.json")
@@ -228,6 +262,7 @@ class VertexBotOrchestrator:
         open_positions = await self.positions_repo.get_open_positions()
         for pos in open_positions:
             await self.position_tracker.register_position(pos)
+        await self.reconcile_wallet_balance()
         logger.info(
             "Inicialização concluída. Modo: %s | Posições ativas restauradas: %d",
             self.settings.EXECUTION_MODE,
@@ -280,6 +315,38 @@ class VertexBotOrchestrator:
             pass
         return self.execution_engine.balance_usd
 
+    def _get_session_start_datetime(self) -> datetime | None:
+        """Lê o timestamp de início da sessão simulada de data/paper_session.json."""
+        state_file = self._get_paper_session_path()
+        if not state_file.exists():
+            return None
+        try:
+            raw = json.loads(state_file.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and raw.get("session_start"):
+                return datetime.fromisoformat(raw["session_start"])
+        except Exception:
+            pass
+        return None
+
+    async def reconcile_wallet_balance(self) -> Decimal:
+        """Reconcilia o saldo de caixa em memória garantindo exatidão contábil (Caixa = Banca + PnL - Alocado)."""
+        if self.settings.EXECUTION_MODE != "PAPER":
+            return self.execution_engine.balance_usd
+
+        try:
+            pnl_data = await self.positions_repo.get_pnl_summary(
+                initial_wallet_usd=float(self.settings.PAPER_INITIAL_WALLET_USD),
+            )
+            active_capital = Decimal(str(pnl_data.get("active_capital_usd", 0.0)))
+            realized_pnl = Decimal(str(pnl_data.get("total_pnl_usd", 0.0)))
+            true_cash = max(Decimal("0.0"), self.settings.PAPER_INITIAL_WALLET_USD + realized_pnl - active_capital)
+            self.execution_engine.balance_usd = true_cash
+            self._write_heartbeat_sync(self.is_running)
+            return true_cash
+        except Exception as exc:
+            logger.warning("Falha ao reconciliar saldo de carteira: %s", exc)
+            return self.execution_engine.balance_usd
+
     async def restart_paper_session(self, new_balance: Decimal | None = None) -> None:
         """Reinicia a sessão simulada: limpa posições, ordens, zera IDs para #1 e reinicia balanço."""
         logger.info("🔄 [REINÍCIO DE SIMULAÇÃO] Limpando dados de trades e reiniciando sessão pelo Dashboard...")
@@ -307,28 +374,52 @@ class VertexBotOrchestrator:
             pass
         return res
 
+    def _update_scanner_max_age(self, max_age_hours: float) -> None:
+        """Propaga o limite de idade máxima do token para os scanners ativos."""
+        self.settings.MAX_TOKEN_AGE_HOURS = max_age_hours
+        if hasattr(self.scanner, "scanners"):
+            for s in self.scanner.scanners:
+                if hasattr(s, "max_age_hours"):
+                    s.max_age_hours = max_age_hours
+        elif hasattr(self.scanner, "max_age_hours"):
+            self.scanner.max_age_hours = max_age_hours
+
     def _apply_execution_config(self, payload: dict[str, Any]) -> None:
         """Aplica parâmetros de execução e dimensionamento de ordens."""
-        if "paper_buy_amount_usd" in payload and payload["paper_buy_amount_usd"] is not None:
+        if payload.get("paper_buy_amount_usd") is not None:
             buy_val = Decimal(str(payload["paper_buy_amount_usd"]))
             if buy_val > Decimal("0.0"):
                 self.settings.PAPER_BUY_AMOUNT_USD = buy_val
                 self.settings.MIN_TRADE_AMOUNT_USD = min(self.settings.MIN_TRADE_AMOUNT_USD, buy_val)
-        if "max_concurrent_positions" in payload and payload["max_concurrent_positions"] is not None:
+        if payload.get("max_concurrent_positions") is not None:
             self.settings.MAX_CONCURRENT_POSITIONS = int(payload["max_concurrent_positions"])
-        if "wallet_balance_usd" in payload and payload["wallet_balance_usd"] is not None:
+        if payload.get("paper_initial_wallet_usd") is not None:
+            self.settings.PAPER_INITIAL_WALLET_USD = Decimal(str(payload["paper_initial_wallet_usd"]))
+        elif payload.get("initial_wallet_usd") is not None:
+            self.settings.PAPER_INITIAL_WALLET_USD = Decimal(str(payload["initial_wallet_usd"]))
+        elif payload.get("wallet_balance_usd") is not None:
             bal = Decimal(str(payload["wallet_balance_usd"]))
-            self.execution_engine.balance_usd = bal
             self.settings.PAPER_INITIAL_WALLET_USD = bal
-        if "min_trade_amount_usd" in payload and payload["min_trade_amount_usd"] is not None:
+            if not self.is_running and len(self.position_tracker.active_positions) == 0:
+                self.execution_engine.balance_usd = bal
+        if payload.get("min_trade_amount_usd") is not None:
             req_min = Decimal(str(payload["min_trade_amount_usd"]))
             self.settings.MIN_TRADE_AMOUNT_USD = min(req_min, self.settings.PAPER_BUY_AMOUNT_USD)
-        if "max_slippage_pct" in payload and payload["max_slippage_pct"] is not None:
+        if payload.get("max_slippage_pct") is not None:
             self.settings.MAX_SLIPPAGE_PCT = Decimal(str(payload["max_slippage_pct"]))
             self.execution_engine.max_slippage_pct = self.settings.MAX_SLIPPAGE_PCT / Decimal("100.0")
+        if payload.get("max_token_age_hours") is not None:
+            self._update_scanner_max_age(float(payload["max_token_age_hours"]))
 
     def _apply_risk_config(self, payload: dict[str, Any]) -> None:
-        """Aplica parâmetros de risco (break-even, trailing stop, stop loss, dual-track e swing ratchet)."""
+        """Aplica parâmetros de risco (break-even, trailing stop, stop loss, scalp timing/alvo, dual-track e swing ratchet)."""
+        if "scalp_max_hold_minutes" in payload and payload["scalp_max_hold_minutes"] is not None:
+            self.settings.SCALP_MAX_HOLD_MINUTES = float(payload["scalp_max_hold_minutes"])
+            self.risk_manager.scalp_max_hold_seconds = self.settings.SCALP_MAX_HOLD_MINUTES * 60.0
+        if "scalp_target_gain_pct" in payload and payload["scalp_target_gain_pct"] is not None:
+            self.settings.SCALP_TARGET_GAIN_PCT = Decimal(str(payload["scalp_target_gain_pct"]))
+            self.risk_manager.scalp_target_gain_pct = self.settings.SCALP_TARGET_GAIN_PCT
+            self.risk_manager.scalp_target_multiplier = Decimal("1.0") + (self.settings.SCALP_TARGET_GAIN_PCT / Decimal("100.0"))
         if "break_even_gain_pct" in payload and payload["break_even_gain_pct"] is not None:
             self.settings.BREAK_EVEN_GAIN_PCT = Decimal(str(payload["break_even_gain_pct"]))
             self.risk_manager.break_even_multiplier = Decimal("1.0") + (self.settings.BREAK_EVEN_GAIN_PCT / Decimal("100.0"))
@@ -357,9 +448,23 @@ class VertexBotOrchestrator:
             mode_val = str(payload["trading_strategy_mode"]).upper()
             if mode_val in ("DUAL", "SCALP_ONLY", "SWING_ONLY"):
                 self.settings.TRADING_STRATEGY_MODE = mode_val  # type: ignore[assignment]
+        if "swing_max_hold_hours" in payload and payload["swing_max_hold_hours"] is not None:
+            self.settings.SWING_MAX_HOLD_HOURS = float(payload["swing_max_hold_hours"])
+            self.risk_manager.swing_max_hold_seconds = self.settings.SWING_MAX_HOLD_HOURS * 3600.0
+        if "swing_target_gain_pct" in payload and payload["swing_target_gain_pct"] is not None:
+            self.settings.SWING_TARGET_GAIN_PCT = Decimal(str(payload["swing_target_gain_pct"]))
+            self.risk_manager.swing_target_gain_pct = self.settings.SWING_TARGET_GAIN_PCT
+            self.risk_manager.swing_target_multiplier = Decimal("1.0") + (self.settings.SWING_TARGET_GAIN_PCT / Decimal("100.0"))
+        if "swing_max_hourly_drop_pct" in payload and payload["swing_max_hourly_drop_pct"] is not None:
+            self.settings.SWING_MAX_HOURLY_DROP_PCT = Decimal(str(payload["swing_max_hourly_drop_pct"]))
+            self.risk_manager.swing_max_hourly_drop_pct = self.settings.SWING_MAX_HOURLY_DROP_PCT
         if "swing_initial_stop_loss_pct" in payload and payload["swing_initial_stop_loss_pct"] is not None:
             self.settings.SWING_INITIAL_STOP_LOSS_PCT = Decimal(str(payload["swing_initial_stop_loss_pct"]))
-            self.risk_manager.swing_stop_multiplier = Decimal("1.0") - (self.settings.SWING_INITIAL_STOP_LOSS_PCT / Decimal("100.0"))
+            pct_val = self.settings.SWING_INITIAL_STOP_LOSS_PCT / Decimal("100.0")
+            if Decimal("0.0") < pct_val < Decimal("1.0"):
+                self.risk_manager.swing_stop_multiplier = Decimal("1.0") - pct_val
+            else:
+                self.risk_manager.swing_stop_multiplier = Decimal("0.0")
         if "swing_tier1_mult" in payload and payload["swing_tier1_mult"] is not None:
             self.settings.SWING_TIER1_TARGET_MULT = Decimal(str(payload["swing_tier1_mult"]))
             self.risk_manager.swing_tier1_mult = self.settings.SWING_TIER1_TARGET_MULT
@@ -372,15 +477,48 @@ class VertexBotOrchestrator:
         if "swing_tier4_mult" in payload and payload["swing_tier4_mult"] is not None:
             self.settings.SWING_TIER4_TARGET_MULT = Decimal(str(payload["swing_tier4_mult"]))
             self.risk_manager.swing_tier4_mult = self.settings.SWING_TIER4_TARGET_MULT
+        if "swing_tier5_mult" in payload and payload["swing_tier5_mult"] is not None:
+            self.settings.SWING_TIER5_TARGET_MULT = Decimal(str(payload["swing_tier5_mult"]))
+            self.risk_manager.swing_tier5_mult = self.settings.SWING_TIER5_TARGET_MULT
         if "swing_trailing_drop_pct" in payload and payload["swing_trailing_drop_pct"] is not None:
             self.settings.SWING_TRAILING_DROP_PCT = Decimal(str(payload["swing_trailing_drop_pct"]))
             self.risk_manager.swing_trailing_drop_pct = self.settings.SWING_TRAILING_DROP_PCT / Decimal("100.0")
 
+    def _apply_market_dynamics_config(self, payload: dict[str, Any]) -> None:
+        """Aplica parâmetros de filtros quantitativos de mercado e anti-dump."""
+        if "min_token_age_scalp_min" in payload and payload["min_token_age_scalp_min"] is not None:
+            self.settings.MIN_TOKEN_AGE_HOURS_SCALP = float(payload["min_token_age_scalp_min"]) / 60.0
+            if hasattr(self, "market_validator"):
+                self.market_validator.min_age_hours_scalp = self.settings.MIN_TOKEN_AGE_HOURS_SCALP
+        if "min_token_age_swing_hours" in payload and payload["min_token_age_swing_hours"] is not None:
+            self.settings.MIN_TOKEN_AGE_HOURS_SWING = float(payload["min_token_age_swing_hours"])
+            if hasattr(self, "market_validator"):
+                self.market_validator.min_age_hours_swing = self.settings.MIN_TOKEN_AGE_HOURS_SWING
+        if "min_volume_1h_usd" in payload and payload["min_volume_1h_usd"] is not None:
+            self.settings.MIN_VOLUME_1H_USD = Decimal(str(payload["min_volume_1h_usd"]))
+            if hasattr(self, "market_validator"):
+                self.market_validator.min_volume_1h_usd = self.settings.MIN_VOLUME_1H_USD
+        if "min_buy_ratio_5m_pct" in payload and payload["min_buy_ratio_5m_pct"] is not None:
+            self.settings.MIN_BUY_RATIO_5M_PCT = Decimal(str(payload["min_buy_ratio_5m_pct"]))
+            if hasattr(self, "market_validator"):
+                self.market_validator.min_buy_ratio_5m_pct = self.settings.MIN_BUY_RATIO_5M_PCT
+        if "min_price_change_5m_pct" in payload and payload["min_price_change_5m_pct"] is not None:
+            self.settings.MIN_PRICE_CHANGE_5M_PCT = Decimal(str(payload["min_price_change_5m_pct"]))
+            if hasattr(self, "market_validator"):
+                self.market_validator.min_price_change_5m_pct = self.settings.MIN_PRICE_CHANGE_5M_PCT
+        if "min_liquidity_swing_usd" in payload and payload["min_liquidity_swing_usd"] is not None:
+            self.settings.MIN_LIQUIDITY_SWING_USD = Decimal(str(payload["min_liquidity_swing_usd"]))
+            if hasattr(self, "market_validator"):
+                self.market_validator.min_liquidity_swing_usd = self.settings.MIN_LIQUIDITY_SWING_USD
+        if "trading_strategy_mode" in payload and hasattr(self, "validator"):
+            self.validator.strategy_mode = str(self.settings.TRADING_STRATEGY_MODE)
+
     def _apply_config_payload(self, payload: dict[str, Any], save_to_disk: bool = True) -> dict[str, Any]:
-        """Aplica alterações nas configurações em todos os módulos ativos (Settings, Risk, Engine, Reentry)."""
+        """Aplica alterações nas configurações em todos os módulos ativos (Settings, Risk, Engine, Reentry, Market)."""
         self._apply_execution_config(payload)
         self._apply_risk_config(payload)
         self._update_reentry_config(payload)
+        self._apply_market_dynamics_config(payload)
 
         logger.info("⚙️ Configurações dinâmicas atualizadas com sucesso via Dashboard API.")
         if save_to_disk:
@@ -391,6 +529,7 @@ class VertexBotOrchestrator:
             "paper_buy_amount_usd": float(self.settings.PAPER_BUY_AMOUNT_USD),
             "max_concurrent_positions": self.settings.MAX_CONCURRENT_POSITIONS,
             "wallet_balance_usd": float(self.execution_engine.balance_usd),
+            "max_token_age_hours": float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS", 3.0)),
             "break_even_gain_pct": float(self.settings.BREAK_EVEN_GAIN_PCT),
             "trailing_stop_drop_pct": float(self.settings.TRAILING_STOP_DROP_PCT),
             "emergency_stop_loss_pct": float(self.settings.EMERGENCY_STOP_LOSS_PCT),
@@ -399,12 +538,24 @@ class VertexBotOrchestrator:
             "reentry_stoploss_cooloff_min": float(self.settings.REENTRY_STOPLOSS_COOLOFF_SEC) / 60.0,
             "reentry_min_bounce_pct": float(self.settings.REENTRY_MIN_BOUNCE_PCT),
             "trading_strategy_mode": str(self.settings.TRADING_STRATEGY_MODE),
+            "scalp_max_hold_minutes": float(getattr(self.settings, "SCALP_MAX_HOLD_MINUTES", 60.0)),
+            "scalp_target_gain_pct": float(getattr(self.settings, "SCALP_TARGET_GAIN_PCT", 100.0)),
+            "swing_max_hold_hours": float(getattr(self.settings, "SWING_MAX_HOLD_HOURS", 24.0)),
+            "swing_target_gain_pct": float(getattr(self.settings, "SWING_TARGET_GAIN_PCT", 2000.0)),
+            "swing_max_hourly_drop_pct": float(getattr(self.settings, "SWING_MAX_HOURLY_DROP_PCT", 15.0)),
             "swing_initial_stop_loss_pct": float(self.settings.SWING_INITIAL_STOP_LOSS_PCT),
             "swing_tier1_mult": float(self.settings.SWING_TIER1_TARGET_MULT),
             "swing_tier2_mult": float(self.settings.SWING_TIER2_TARGET_MULT),
             "swing_tier3_mult": float(self.settings.SWING_TIER3_TARGET_MULT),
             "swing_tier4_mult": float(self.settings.SWING_TIER4_TARGET_MULT),
+            "swing_tier5_mult": float(getattr(self.settings, "SWING_TIER5_TARGET_MULT", 21.0)),
             "swing_trailing_drop_pct": float(self.settings.SWING_TRAILING_DROP_PCT),
+            "min_token_age_scalp_min": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)) * 60.0,
+            "min_token_age_swing_hours": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)),
+            "min_volume_1h_usd": float(getattr(self.settings, "MIN_VOLUME_1H_USD", 15000.0)),
+            "min_buy_ratio_5m_pct": float(getattr(self.settings, "MIN_BUY_RATIO_5M_PCT", 50.0)),
+            "min_price_change_5m_pct": float(getattr(self.settings, "MIN_PRICE_CHANGE_5M_PCT", -2.0)),
+            "min_liquidity_swing_usd": float(getattr(self.settings, "MIN_LIQUIDITY_SWING_USD", 20000.0)),
         }
 
     def _update_reentry_config(self, payload: dict[str, Any]) -> None:
@@ -491,6 +642,7 @@ class VertexBotOrchestrator:
         try:
             loop = asyncio.get_running_loop()
             if loop.is_running():
+                asyncio.create_task(self.reconcile_wallet_balance())
                 asyncio.create_task(self._try_fill_slots_from_waiting_queue())
         except RuntimeError:
             pass
@@ -593,19 +745,69 @@ class VertexBotOrchestrator:
         try:
             raw_cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
             if isinstance(raw_cfg, dict):
-                if "paper_buy_amount_usd" in raw_cfg and raw_cfg["paper_buy_amount_usd"] is not None:
-                    val = Decimal(str(raw_cfg["paper_buy_amount_usd"]))
-                    if val > Decimal("0.0"):
-                        self.settings.PAPER_BUY_AMOUNT_USD = val
-                        self.settings.MIN_TRADE_AMOUNT_USD = min(self.settings.MIN_TRADE_AMOUNT_USD, val)
-                if "max_concurrent_positions" in raw_cfg and raw_cfg["max_concurrent_positions"] is not None:
-                    self.settings.MAX_CONCURRENT_POSITIONS = int(raw_cfg["max_concurrent_positions"])
-                if "trading_strategy_mode" in raw_cfg and raw_cfg["trading_strategy_mode"]:
-                    mode_val = str(raw_cfg["trading_strategy_mode"]).upper()
-                    if mode_val in ("DUAL", "SCALP_ONLY", "SWING_ONLY"):
-                        self.settings.TRADING_STRATEGY_MODE = mode_val  # type: ignore[assignment]
+                self._apply_config_payload(raw_cfg, save_to_disk=False)
         except Exception:
             pass
+
+    def _extract_age_from_timestamps(self, raw_event: dict[str, Any], now_utc: datetime) -> float | None:
+        """Extrai idade via timestamp de criação explícito (pairCreatedAt ou pool_created_at)."""
+        pair_created = raw_event.get("pairCreatedAt")
+        if pair_created is None and isinstance(raw_event.get("pair_data"), dict):
+            pair_created = raw_event["pair_data"].get("pairCreatedAt")
+
+        if pair_created is not None:
+            try:
+                created_ms = float(pair_created)
+                if created_ms > 0:
+                    now_ms = now_utc.timestamp() * 1000.0
+                    return max(0.0, (now_ms - created_ms) / (1000.0 * 3600.0))
+            except (ValueError, TypeError):
+                pass
+
+        hint = raw_event.get("hint")
+        pool_iso = hint.get("pool_created_at") if isinstance(hint, dict) else raw_event.get("pool_created_at")
+        if pool_iso:
+            try:
+                clean_ts = str(pool_iso).replace("Z", "+00:00")
+                dt = datetime.fromisoformat(clean_ts)
+                return max(0.0, (now_utc - dt).total_seconds() / 3600.0)
+            except Exception:
+                pass
+
+        return None
+
+    def _extract_age_from_raw_fields(
+        self,
+        raw_event: dict[str, Any],
+        detection_ts: datetime,
+        now_utc: datetime,
+    ) -> float | None:
+        """Extrai idade a partir de age_hours já computado ou evento de migração/graduação."""
+        if "age_hours" in raw_event:
+            try:
+                base_age = float(raw_event["age_hours"])
+                elapsed = max(0.0, (now_utc - detection_ts).total_seconds() / 3600.0)
+                return max(0.0, base_age + elapsed)
+            except (ValueError, TypeError):
+                pass
+
+        if raw_event.get("txType") == "migration" or raw_event.get("event") == "raydium_graduation":
+            elapsed = max(0.0, (now_utc - detection_ts).total_seconds() / 3600.0)
+            return max(0.0, elapsed)
+
+        return None
+
+    def _extract_token_age_hours(self, token: TokenMetadata) -> float | None:
+        """Extrai ou estima a idade do token em horas desde a criação do par/pool."""
+        if not isinstance(token.raw_event, dict):
+            return None
+
+        now_utc = datetime.now(UTC)
+        age_from_ts = self._extract_age_from_timestamps(token.raw_event, now_utc)
+        if age_from_ts is not None:
+            return age_from_ts
+
+        return self._extract_age_from_raw_fields(token.raw_event, token.detection_timestamp, now_utc)
 
     def _enqueue_waiting_token(self, token: TokenMetadata, reason: str) -> None:
         """Adiciona ou atualiza um token aprovado na fila de espera por slots/saldo."""
@@ -616,6 +818,7 @@ class VertexBotOrchestrator:
             except (ValueError, TypeError):
                 raw_price = None
 
+        token_age = self._extract_token_age_hours(token)
         existing = self.waiting_tokens.get(token.address)
         enqueued_at = existing["enqueued_at"] if existing else datetime.now(UTC).isoformat()
 
@@ -629,28 +832,102 @@ class VertexBotOrchestrator:
             "waiting_reason": reason,
             "enqueued_at": enqueued_at,
             "last_price": raw_price,
+            "age_hours": round(token_age, 2) if token_age is not None else None,
+            "raw_event": token.raw_event if isinstance(token.raw_event, dict) else {},
         }
         self._save_waiting_tokens()
 
-    async def _try_fill_slots_from_waiting_queue(self) -> None:
-        """Processa a fila de espera de tokens aprovados e abre posições se houver vagas e saldo."""
+    def _is_waiting_token_expired(
+        self,
+        item: dict[str, Any],
+        max_age_hours: float,
+        now_utc: datetime,
+    ) -> bool:
+        """Verifica se um token na fila de espera ultrapassou o limite de idade permitido."""
+        base_age = item.get("age_hours")
+        if base_age is None:
+            return False
+
+        queued_hours = 0.0
+        enqueued_at_str = item.get("enqueued_at")
+        if enqueued_at_str:
+            try:
+                eq_dt = datetime.fromisoformat(enqueued_at_str)
+                queued_hours = max(0.0, (now_utc - eq_dt).total_seconds() / 3600.0)
+            except Exception:
+                pass
+
+        current_age = float(base_age) + queued_hours
+        if current_age > max_age_hours:
+            logger.warning(
+                "⌛ [FILA EXPIRADA] Token %s excedeu idade máxima permitida (%.2fh > %.1fh) aguardando na fila. Descartando.",
+                item.get("symbol", item["address"][:8]),
+                current_age,
+                max_age_hours,
+            )
+            return True
+        return False
+
+    def _is_waiting_token_dumped(self, item: dict[str, Any], live_price: Decimal | None) -> bool:
+        """Verifica se o token despencou >30% enquanto aguardava na fila de espera."""
+        last_price = item.get("last_price")
+        if last_price and live_price and live_price < Decimal(str(last_price)) * Decimal("0.70"):
+            logger.warning(
+                "⚠️ [FILA DESQUALIFICADA] Token %s despencou >30%% na fila de espera ($%.6f -> $%.6f). Descartando.",
+                item.get("symbol", item["address"][:8]),
+                last_price,
+                live_price,
+            )
+            return True
+        return False
+
+    def _can_process_waiting_queue(self) -> tuple[bool, int, Decimal, int]:
+        """Avalia condições prévias (status, slots e saldo) para consumo da fila de espera."""
         if not self.waiting_tokens or self.is_paused or not self.is_running:
-            return
+            return False, 0, Decimal("0.0"), 0
 
         active_count = len(self.position_tracker.active_positions)
-        max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 5))
+        max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 50))
         strategy_mode = getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")
         required_slots = 2 if (strategy_mode == "DUAL" and max_positions >= 2) else 1
 
         if active_count + required_slots > max_positions:
-            return
+            return False, 0, Decimal("0.0"), 0
 
         configured_buy = Decimal(str(getattr(self.settings, "PAPER_BUY_AMOUNT_USD", "1.0")))
         min_trade = Decimal(str(getattr(self.settings, "MIN_TRADE_AMOUNT_USD", "1.0")))
         min_required = max(Decimal("0.05"), min(configured_buy, min_trade) - Decimal("0.05"))
 
         if self.execution_engine.balance_usd < min_required:
+            return False, 0, Decimal("0.0"), 0
+
+        return True, required_slots, min_required, max_positions
+
+    def _build_waiting_token_meta(self, item: dict[str, Any], price: Decimal | None) -> TokenMetadata:
+        """Reconstrói TokenMetadata a partir do item da fila de espera."""
+        raw_event = dict(item.get("raw_event") or {})
+        if price:
+            raw_event["priceUsd"] = str(price)
+
+        return TokenMetadata(
+            address=item["address"],
+            chain=item.get("chain", "solana"),
+            dex=item.get("dex", "raydium"),
+            initial_liquidity_usd=Decimal(str(item.get("initial_liquidity_usd", "0.0"))),
+            symbol=item.get("symbol"),
+            name=item.get("name"),
+            detection_timestamp=datetime.now(UTC),
+            raw_event=raw_event,
+        )
+
+    async def _try_fill_slots_from_waiting_queue(self) -> None:
+        """Processa a fila de espera de tokens aprovados e abre posições se houver vagas e saldo."""
+        can_run, required_slots, min_required, max_positions = self._can_process_waiting_queue()
+        if not can_run:
             return
+
+        max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS", 3.0))
+        now_utc = datetime.now(UTC)
 
         candidates = list(self.waiting_tokens.values())
         addrs = [c["address"] for c in candidates]
@@ -665,31 +942,18 @@ class VertexBotOrchestrator:
                 break
 
             addr = item["address"]
-            price = live_prices.get(addr)
-
-            last_price = item.get("last_price")
-            if last_price and price and price < Decimal(str(last_price)) * Decimal("0.70"):
-                logger.warning(
-                    "⚠️ [FILA DESQUALIFICADA] Token %s despencou >30%% na fila de espera ($%.6f -> $%.6f). Descartando.",
-                    item.get("symbol", addr[:8]),
-                    last_price,
-                    price,
-                )
+            if self._is_waiting_token_expired(item, max_age_hours, now_utc):
                 self.waiting_tokens.pop(addr, None)
                 self._save_waiting_tokens()
                 continue
 
-            token_meta = TokenMetadata(
-                address=addr,
-                chain=item.get("chain", "solana"),
-                dex=item.get("dex", "raydium"),
-                initial_liquidity_usd=Decimal(str(item.get("initial_liquidity_usd", "0.0"))),
-                symbol=item.get("symbol"),
-                name=item.get("name"),
-                detection_timestamp=datetime.now(UTC),
-                raw_event={"priceUsd": str(price)} if price else {},
-            )
+            price = live_prices.get(addr)
+            if self._is_waiting_token_dumped(item, price):
+                self.waiting_tokens.pop(addr, None)
+                self._save_waiting_tokens()
+                continue
 
+            token_meta = self._build_waiting_token_meta(item, price)
             await self._evaluate_and_execute_entry(token_meta)
 
     async def _evaluate_and_execute_entry(self, token: TokenMetadata) -> None:
@@ -697,7 +961,23 @@ class VertexBotOrchestrator:
         # 0. Sincroniza configurações mais recentes do disco para garantir conformidade com ajustes
         self._sync_config_from_disk_if_present()
 
-        # 1. Verifica se o token já possui uma posição ativa em aberto (evita compras duplicadas simultâneas)
+        # 1. Validação estrita de idade máxima do token no mercado
+        max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS", 3.0))
+        token_age = self._extract_token_age_hours(token)
+        if token_age is not None and token_age > max_age_hours:
+            logger.warning(
+                "⌛ [TOKEN MUITO ANTIGO] Token %s (%s) possui %.2fh de mercado (> limite de %.1fh). Entrada descartada.",
+                token.symbol or "N/A",
+                token.address,
+                token_age,
+                max_age_hours,
+            )
+            if token.address in self.waiting_tokens:
+                self.waiting_tokens.pop(token.address, None)
+                self._save_waiting_tokens()
+            return
+
+        # 2. Verifica se o token já possui uma posição ativa em aberto (evita compras duplicadas simultâneas)
         active_tokens = {p.token_address for p in self.position_tracker.active_positions.values()}
         if token.address in active_tokens:
             logger.info(
@@ -721,7 +1001,7 @@ class VertexBotOrchestrator:
         else:
             min_required = max(Decimal("0.50"), min_trade - Decimal("0.05"))
 
-        # 2. Se não houver slots disponíveis ou caixa suficiente, adiciona à Fila de Espera de Aprovados
+        # 3. Se não houver slots disponíveis ou caixa suficiente, adiciona à Fila de Espera de Aprovados
         waiting_reason: str | None = None
         if active_count + required_slots > max_positions:
             waiting_reason = "AGUARDANDO_SLOT"
@@ -742,12 +1022,12 @@ class VertexBotOrchestrator:
             )
             return
 
-        # 3. Se slots e caixa estão liberados, remove da fila de espera se estiver lá
+        # 4. Se slots e caixa estão liberados, remove da fila de espera se estiver lá
         if token.address in self.waiting_tokens:
             self.waiting_tokens.pop(token.address, None)
             self._save_waiting_tokens()
 
-        # 4. Calcula montante de compra respeitando estritamente o valor configurado em Ajustes
+        # 5. Calcula montante de compra respeitando estritamente o valor configurado em Ajustes
         if configured_buy and configured_buy > Decimal("0.0"):
             buy_amount_usd = min(available_cash, configured_buy)
         else:
@@ -769,7 +1049,7 @@ class VertexBotOrchestrator:
             token.symbol or token.address[:8],
         )
 
-        # 5. Dispara compra via Execution Engine de acordo com a estratégia ativa
+        # 6. Dispara compra via Execution Engine de acordo com a estratégia ativa
         await self._dispatch_entry_orders(token, buy_amount_usd, strategy_mode, max_positions)
 
     async def _dispatch_entry_orders(
@@ -780,10 +1060,43 @@ class VertexBotOrchestrator:
         max_positions: int,
     ) -> None:
         """Executa a ordem de compra conforme a estratégia ativa (DUAL, SWING_ONLY ou SCALP_ONLY)."""
+        metrics = self.market_validator.extract_metrics(token) if hasattr(self, "market_validator") else {}
+        eligible_scalp = metrics.get("eligible_scalp", True)
+        eligible_swing = metrics.get("eligible_swing", True)
+
         if strategy_mode == "DUAL" and max_positions >= 2:
-            half_amount = buy_amount_usd / Decimal("2.0")
-            if half_amount >= Decimal("0.05"):
-                await self._execute_dual_track_entry(token, half_amount)
+            if eligible_scalp and eligible_swing:
+                half_amount = buy_amount_usd / Decimal("2.0")
+                if half_amount >= Decimal("0.05"):
+                    await self._execute_dual_track_entry(token, half_amount)
+                    return
+            elif eligible_scalp and not eligible_swing:
+                logger.info(
+                    "🎯 [MODO DUAL -> SCALP] Token %s qualificado para Scalp (30m-4h). Abrindo perna de Scalp.",
+                    token.symbol or token.address[:8],
+                )
+                pos_scalp = await self.execution_engine.execute_buy(
+                    token,
+                    amount_usd=buy_amount_usd,
+                    strategy_type="SCALP",
+                )
+                if pos_scalp:
+                    self.telemetry.record_trade_opened()
+                    await self.position_tracker.register_position(pos_scalp)
+                return
+            elif eligible_swing and not eligible_scalp:
+                logger.info(
+                    "🏛️ [MODO DUAL -> SWING] Token %s consolidado para Swing (2h+ / Liq $20k+). Abrindo perna de Swing.",
+                    token.symbol or token.address[:8],
+                )
+                pos_swing = await self.execution_engine.execute_buy(
+                    token,
+                    amount_usd=buy_amount_usd,
+                    strategy_type="SWING",
+                )
+                if pos_swing:
+                    self.telemetry.record_trade_opened()
+                    await self.position_tracker.register_position(pos_swing)
                 return
 
         if strategy_mode == "SWING_ONLY":

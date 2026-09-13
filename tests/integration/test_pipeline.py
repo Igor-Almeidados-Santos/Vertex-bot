@@ -79,40 +79,44 @@ async def test_full_pipeline_mock(tmp_path: Path):
 
     pos_id = position.id
 
-    # 4. Tick de Preço para +110% (Gatilho de Break-Even)
-    price_be = position.entry_price * Decimal("2.10")
-    await tracker.process_price_tick(pos_id, price_be)
+    # 4. Tick de Preço para +110% (Gatilho de Alvo Scalp: Venda de 100% no alvo)
+    price_target = position.entry_price * Decimal("2.10")
+    await tracker.process_price_tick(pos_id, price_target)
 
-    # Verifica se Break-Even foi registrado
-    updated_pos = (await positions_repo.get_open_positions())[0]
-    assert updated_pos.break_even_triggered is True
-    assert updated_pos.status == PositionStatus.PARTIALLY_CLOSED
-    expected_half = position.initial_token_amount / Decimal("2.0")
-    assert abs(updated_pos.remaining_token_amount - expected_half) < Decimal("0.0001")
-
-    # 5. Preço sobe mais para 2.5x e depois recua 15% (Gatilho de Trailing Stop)
-    price_high = position.entry_price * Decimal("2.50")
-    await tracker.process_price_tick(pos_id, price_high)
-
-    price_drop = price_high * Decimal("0.85")
-    await tracker.process_price_tick(pos_id, price_drop)
-
-    # 6. Verifica encerramento da posição e auditoria contábil
+    # 5. Verifica encerramento da posição Scalp e auditoria contábil
     open_positions = await positions_repo.get_open_positions()
-    assert len(open_positions) == 0  # Posição foi completamente encerrada!
+    assert len(open_positions) == 0  # Posição Scalp foi 100% encerrada no alvo!
 
-    # Consulta ordens executadas e valida preços de execução reais
+    # Consulta ordens executadas da posição Scalp
     orders = await db.fetchall(
         "SELECT * FROM ordens_executadas WHERE position_id = ? ORDER BY id ASC",
         (pos_id,),
     )
-    assert len(orders) == 3  # BUY, TAKE_PROFIT_PARTIAL, TRAILING_STOP_EXIT
+    assert len(orders) == 2  # BUY e saída a mercado por SCALP_TARGET_REACHED
     order_dicts = [dict(o) for o in orders]
     assert order_dicts[0]["order_type"] == "BUY"
-    assert order_dicts[1]["order_type"] == "TAKE_PROFIT_PARTIAL"
-    assert abs(Decimal(str(order_dicts[1]["price"])) - price_be) < Decimal("0.0001")
-    assert order_dicts[2]["order_type"] == "TRAILING_STOP_EXIT"
-    assert abs(Decimal(str(order_dicts[2]["price"])) - price_drop) < Decimal("0.0001")
+    assert order_dicts[1]["order_type"] == "TRAILING_STOP_EXIT"
+    assert abs(Decimal(str(order_dicts[1]["price"])) - price_target) < Decimal("0.0001")
+
+    # 6. Valida também uma posição SWING no pipeline integrado
+    pos_swing = await engine.execute_buy(token, amount_usd=buy_amount, strategy_type="SWING")
+    assert pos_swing is not None
+    assert pos_swing.id is not None
+    await tracker.register_position(pos_swing)
+    swing_id = pos_swing.id
+
+    # SWING atinge 2.0x (Degrau 1) -> NÃO vende, apenas eleva o piso para o BE
+    await tracker.process_price_tick(swing_id, pos_swing.entry_price * Decimal("2.05"))
+    open_positions_swing = await positions_repo.get_open_positions()
+    assert len(open_positions_swing) == 1
+    assert pos_swing.ratchet_tier == 1
+    assert pos_swing.ratchet_floor_price == pos_swing.entry_price
+
+    # SWING recua abaixo do piso (BE) -> Encerra com SWING_RATCHET_STOP
+    await tracker.process_price_tick(swing_id, pos_swing.entry_price * Decimal("0.95"))
+    assert len(await positions_repo.get_open_positions()) == 0
+
+    await db.close()
 
     # Limpeza
     await db.close()

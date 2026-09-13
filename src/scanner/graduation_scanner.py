@@ -32,12 +32,14 @@ class RaydiumGraduationScanner:
         reconnect_interval_seconds: float = 3.0,
         sol_price_usd: Decimal = Decimal("150.0"),
         max_seen_cache: int = 10000,
+        incubator_scanner: Any | None = None,
     ) -> None:
         self.detection_queue: asyncio.Queue[TokenMetadata] = detection_queue
         self.ws_url: str = ws_url
         self.reconnect_interval: float = reconnect_interval_seconds
         self.sol_price_usd: Decimal = sol_price_usd
         self.max_seen_cache: int = max_seen_cache
+        self.incubator_scanner: Any | None = incubator_scanner
         self.is_running: bool = False
         self._task: asyncio.Task[None] | None = None
         self._seen_addresses: set[str] = set()
@@ -111,6 +113,37 @@ class RaydiumGraduationScanner:
                                     },
                                 )
                                 await self.detection_queue.put(token)
+                                if self.incubator_scanner and hasattr(self.incubator_scanner, "_register_maturing_candidate"):
+                                    self.incubator_scanner._register_maturing_candidate(
+                                        token.address,
+                                        0.0,
+                                        None,
+                                        {
+                                            "pool_address": token.pool_address,
+                                            "name": token.name,
+                                            "symbol": token.symbol,
+                                        },
+                                    )
+                                    logger.info(
+                                        "🎓 [GRADUAÇÃO RAYDIUM INCUBADA] Token: %s (%s) | Adicionado à incubadora de maturação para evitar sniper dump.",
+                                        token.symbol or "N/A",
+                                        token.address,
+                                    )
+                                else:
+                                    logger.info(
+                                        "🎓 [GRADUAÇÃO RAYDIUM DETECTADA] Token: %s (%s) | Pool: %s | Liq: $%.2f",
+                                        token.symbol or "N/A",
+                                        token.address,
+                                        token.pool_address or "N/A",
+                                        token.initial_liquidity_usd,
+                                        extra={
+                                            "event": "RAYDIUM_GRADUATION_DETECTED",
+                                            "token_address": token.address,
+                                            "pool_address": token.pool_address,
+                                            "liquidity_usd": str(token.initial_liquidity_usd),
+                                        },
+                                    )
+                                    await self.detection_queue.put(token)
                         except Exception as parse_err:
                             logger.debug("Erro ao decodificar evento de graduação: %s", parse_err)
 

@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     # === PROVEDOR DE INGESTÃO (SCANNER) ===
     SCANNER_PROVIDER: Literal["MATURE_POOLS", "INDEXED", "RAW_RPC", "PUMPPORTAL", "HYBRID", "GRADUATIONS"] = "HYBRID"
     MIN_TOKEN_AGE_HOURS: float = 0.25  # 15 minutos de existência
-    MAX_TOKEN_AGE_HOURS: float = 720.0  # Até 30 dias (1 mês) de existência
-    ENABLE_ESTABLISHED_POOLS: bool = True  # Coleta pools consolidadas e trending (1d a 1 mês)
+    MAX_TOKEN_AGE_HOURS: float = 3.0   # Até 3 horas (Fresh tokens / Alto potencial de multiplicação inicial)
+    ENABLE_ESTABLISHED_POOLS: bool = False  # Foca em tokens recém-nascidos/graduados e desativa pools antigas
     MATURE_POOLS_POLL_INTERVAL_SEC: float = 5.0
     WATCHLIST_POLL_INTERVAL_SEC: float = 25.0  # Intervalo de verificação de reentrada na watchlist
     WATCHLIST_RETRY_COOLDOWN_SEC: float = 60.0  # Cooldown por token na watchlist
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # === PAPER TRADING DEFAULTS ===
     PAPER_INITIAL_WALLET_USD: Decimal = Decimal("5.0")
-    MAX_CONCURRENT_POSITIONS: int = 5
+    MAX_CONCURRENT_POSITIONS: int = 50
     MIN_TRADE_AMOUNT_USD: Decimal = Decimal("1.0")
     PAPER_INITIAL_BALANCE_SOL: Decimal = Decimal("10.0")
     PAPER_SIMULATED_LATENCY_MS: int = 250
@@ -78,14 +78,30 @@ class Settings(BaseSettings):
 
     # === ESTRATÉGIAS DUAL-TRACK (SCALP + SWING RATCHET) ===
     TRADING_STRATEGY_MODE: Literal["DUAL", "SCALP_ONLY", "SWING_ONLY"] = "DUAL"
-    SWING_INITIAL_STOP_LOSS_PCT: Decimal = Decimal("20.0")
-    SWING_TIER1_TARGET_MULT: Decimal = Decimal("2.0")  # 2x: Piso sobe para Entrada ($x)
-    SWING_TIER2_TARGET_MULT: Decimal = Decimal("3.0")  # 3x: Piso sobe para Degrau 1 ($y / +100% travado)
-    SWING_TIER3_TARGET_MULT: Decimal = Decimal("5.0")  # 5x: Piso sobe para Degrau 2 ($z / +200% travado)
-    SWING_TIER4_TARGET_MULT: Decimal = Decimal("10.0") # 10x: Piso sobe para Degrau 3 (+400% travado)
+    SCALP_MAX_HOLD_MINUTES: float = 60.0             # Duração máxima da perna Scalp: até 1 hora
+    SCALP_TARGET_GAIN_PCT: Decimal = Decimal("100.0") # Alvo de saída Scalp: +100% (2x) com 100% de venda
+    SWING_MAX_HOLD_HOURS: float = 24.0               # Duração máxima da perna Swing: até 24 horas
+    SWING_TARGET_GAIN_PCT: Decimal = Decimal("2000.0")# Alvo mestre de lucro: até +2.000% (21x)
+    SWING_MAX_HOURLY_DROP_PCT: Decimal = Decimal("15.0") # Queda máxima na hora para decidir encerramento
+    SWING_INITIAL_STOP_LOSS_PCT: Decimal = Decimal("0.0")
+    SWING_TIER1_TARGET_MULT: Decimal = Decimal("2.0")  # +100% (2x): Piso sobe para Entrada ($x / BE)
+    SWING_TIER2_TARGET_MULT: Decimal = Decimal("4.0")  # +300% (4x): Piso sobe para 2x (+100% travado)
+    SWING_TIER3_TARGET_MULT: Decimal = Decimal("6.0")  # +500% (6x): Piso sobe para 4x (+300% travado)
+    SWING_TIER4_TARGET_MULT: Decimal = Decimal("11.0") # +1.000% (11x): Piso sobe para 6x (+500% travado)
+    SWING_TIER5_TARGET_MULT: Decimal = Decimal("21.0") # +2.000% (21x): Alvo mestre atingido (100% Take Profit)
     SWING_TRAILING_DROP_PCT: Decimal = Decimal("25.0") # Trailing stop elástico (-25%)
     MAX_SCALP_POSITIONS: int = 3
     MAX_SWING_POSITIONS: int = 3
+
+    # === PARÂMETROS DE DINÂMICA DE MERCADO (ANTI-DUMP & SELEÇÃO) ===
+    MIN_TOKEN_AGE_HOURS_SCALP: float = 0.5   # 30 minutos (evita zona de morte de snipers)
+    MAX_TOKEN_AGE_HOURS_SCALP: float = 4.0   # Até 4 horas
+    MIN_TOKEN_AGE_HOURS_SWING: float = 2.0   # Mínimo 2 horas de consolidação
+    MAX_TOKEN_AGE_HOURS_SWING: float = 48.0  # Até 48 horas (ou dias)
+    MIN_VOLUME_1H_USD: Decimal = Decimal("15000.0")  # Giro mínimo em 1h
+    MIN_BUY_RATIO_5M_PCT: Decimal = Decimal("50.0")  # Ao menos 50% de compras em 5m
+    MIN_PRICE_CHANGE_5M_PCT: Decimal = Decimal("-2.0")  # Não comprar em queda livre
+    MIN_LIQUIDITY_SWING_USD: Decimal = Decimal("20000.0")  # Liquidez mais densa para swing
 
     # === LIVE TRADING ===
     WALLET_PRIVATE_KEY_BASE58: str | None = None

@@ -5,6 +5,7 @@ Construído com aiohttp.web para leitura concorrente em SQLite (WAL mode).
 
 import asyncio
 import json
+import math
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -25,6 +26,27 @@ STATUS_FILE = Path("data/bot_status.json")
 CONTROL_FILE = Path("data/bot_control.json")
 CONFIG_FILE = Path("data/bot_config.json")
 SESSION_FILE = Path("data/paper_session.json")
+
+
+def _safe_float(val: Any, default: float) -> float:
+    """Converte valor para float de forma defensiva contra None, NaN ou tipos inválidos."""
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        return default if math.isnan(f) or math.isinf(f) else f
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_int(val: Any, default: int) -> int:
+    """Converte valor para int de forma defensiva contra None ou tipos inválidos."""
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
 
 
 def _open_runtime_log_file() -> Any:
@@ -178,25 +200,38 @@ class DashboardServer:
             if settings_obj:
                 return {
                     "execution_mode": getattr(settings_obj, "EXECUTION_MODE", "PAPER"),
-                    "max_concurrent_positions": int(getattr(settings_obj, "MAX_CONCURRENT_POSITIONS", 5)),
-                    "paper_buy_amount_usd": float(getattr(settings_obj, "PAPER_BUY_AMOUNT_USD", 1.0)),
-                    "wallet_balance_usd": float(getattr(settings_obj, "PAPER_INITIAL_WALLET_USD", 10.0)),
-                    "paper_initial_wallet_usd": float(getattr(settings_obj, "PAPER_INITIAL_WALLET_USD", 10.0)),
-                    "min_trade_amount_usd": float(getattr(settings_obj, "MIN_TRADE_AMOUNT_USD", 1.0)),
-                    "break_even_gain_pct": float(getattr(settings_obj, "BREAK_EVEN_GAIN_PCT", 100.0)),
-                    "trailing_stop_drop_pct": float(getattr(settings_obj, "TRAILING_STOP_DROP_PCT", 12.0)),
-                    "emergency_stop_loss_pct": float(getattr(settings_obj, "EMERGENCY_STOP_LOSS_PCT", 20.0)),
-                    "max_slippage_pct": float(getattr(settings_obj, "MAX_SLIPPAGE_PCT", 1.5)),
-                    "reentry_trailing_cooloff_min": float(getattr(settings_obj, "REENTRY_TRAILING_COOLOFF_SEC", 300.0)) / 60.0,
-                    "reentry_stoploss_cooloff_min": float(getattr(settings_obj, "REENTRY_STOPLOSS_COOLOFF_SEC", 1800.0)) / 60.0,
-                    "reentry_min_bounce_pct": float(getattr(settings_obj, "REENTRY_MIN_BOUNCE_PCT", 3.0)),
+                    "max_concurrent_positions": _safe_int(getattr(settings_obj, "MAX_CONCURRENT_POSITIONS", 50), 50),
+                    "paper_buy_amount_usd": _safe_float(getattr(settings_obj, "PAPER_BUY_AMOUNT_USD", 1.0), 1.0),
+                    "wallet_balance_usd": _safe_float(getattr(settings_obj, "PAPER_INITIAL_WALLET_USD", 10.0), 10.0),
+                    "paper_initial_wallet_usd": _safe_float(getattr(settings_obj, "PAPER_INITIAL_WALLET_USD", 10.0), 10.0),
+                    "min_trade_amount_usd": _safe_float(getattr(settings_obj, "MIN_TRADE_AMOUNT_USD", 1.0), 1.0),
+                    "max_token_age_hours": _safe_float(getattr(settings_obj, "MAX_TOKEN_AGE_HOURS", 3.0), 3.0),
+                    "break_even_gain_pct": _safe_float(getattr(settings_obj, "BREAK_EVEN_GAIN_PCT", 100.0), 100.0),
+                    "trailing_stop_drop_pct": _safe_float(getattr(settings_obj, "TRAILING_STOP_DROP_PCT", 12.0), 12.0),
+                    "emergency_stop_loss_pct": _safe_float(getattr(settings_obj, "EMERGENCY_STOP_LOSS_PCT", 20.0), 20.0),
+                    "max_slippage_pct": _safe_float(getattr(settings_obj, "MAX_SLIPPAGE_PCT", 1.5), 1.5),
+                    "reentry_trailing_cooloff_min": _safe_float(getattr(settings_obj, "REENTRY_TRAILING_COOLOFF_SEC", 300.0), 300.0) / 60.0,
+                    "reentry_stoploss_cooloff_min": _safe_float(getattr(settings_obj, "REENTRY_STOPLOSS_COOLOFF_SEC", 1800.0), 1800.0) / 60.0,
+                    "reentry_min_bounce_pct": _safe_float(getattr(settings_obj, "REENTRY_MIN_BOUNCE_PCT", 3.0), 3.0),
                     "trading_strategy_mode": str(getattr(settings_obj, "TRADING_STRATEGY_MODE", "DUAL")),
-                    "swing_initial_stop_loss_pct": float(getattr(settings_obj, "SWING_INITIAL_STOP_LOSS_PCT", 20.0)),
-                    "swing_tier1_mult": float(getattr(settings_obj, "SWING_TIER1_TARGET_MULT", 2.0)),
-                    "swing_tier2_mult": float(getattr(settings_obj, "SWING_TIER2_TARGET_MULT", 3.0)),
-                    "swing_tier3_mult": float(getattr(settings_obj, "SWING_TIER3_TARGET_MULT", 5.0)),
-                    "swing_tier4_mult": float(getattr(settings_obj, "SWING_TIER4_TARGET_MULT", 10.0)),
-                    "swing_trailing_drop_pct": float(getattr(settings_obj, "SWING_TRAILING_DROP_PCT", 25.0)),
+                    "scalp_max_hold_minutes": _safe_float(getattr(settings_obj, "SCALP_MAX_HOLD_MINUTES", 60.0), 60.0),
+                    "scalp_target_gain_pct": _safe_float(getattr(settings_obj, "SCALP_TARGET_GAIN_PCT", 100.0), 100.0),
+                    "swing_max_hold_hours": _safe_float(getattr(settings_obj, "SWING_MAX_HOLD_HOURS", 24.0), 24.0),
+                    "swing_target_gain_pct": _safe_float(getattr(settings_obj, "SWING_TARGET_GAIN_PCT", 2000.0), 2000.0),
+                    "swing_max_hourly_drop_pct": _safe_float(getattr(settings_obj, "SWING_MAX_HOURLY_DROP_PCT", 15.0), 15.0),
+                    "swing_initial_stop_loss_pct": _safe_float(getattr(settings_obj, "SWING_INITIAL_STOP_LOSS_PCT", 0.0), 0.0),
+                    "swing_tier1_mult": _safe_float(getattr(settings_obj, "SWING_TIER1_TARGET_MULT", 2.0), 2.0),
+                    "swing_tier2_mult": _safe_float(getattr(settings_obj, "SWING_TIER2_TARGET_MULT", 4.0), 4.0),
+                    "swing_tier3_mult": _safe_float(getattr(settings_obj, "SWING_TIER3_TARGET_MULT", 6.0), 6.0),
+                    "swing_tier4_mult": _safe_float(getattr(settings_obj, "SWING_TIER4_TARGET_MULT", 11.0), 11.0),
+                    "swing_tier5_mult": _safe_float(getattr(settings_obj, "SWING_TIER5_TARGET_MULT", 21.0), 21.0),
+                    "swing_trailing_drop_pct": _safe_float(getattr(settings_obj, "SWING_TRAILING_DROP_PCT", 25.0), 25.0),
+                    "min_token_age_scalp_min": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5), 0.5) * 60.0,
+                    "min_token_age_swing_hours": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SWING", 2.0), 2.0),
+                    "min_volume_1h_usd": _safe_float(getattr(settings_obj, "MIN_VOLUME_1H_USD", 15000.0), 15000.0),
+                    "min_buy_ratio_5m_pct": _safe_float(getattr(settings_obj, "MIN_BUY_RATIO_5M_PCT", 50.0), 50.0),
+                    "min_price_change_5m_pct": _safe_float(getattr(settings_obj, "MIN_PRICE_CHANGE_5M_PCT", -2.0), -2.0),
+                    "min_liquidity_swing_usd": _safe_float(getattr(settings_obj, "MIN_LIQUIDITY_SWING_USD", 20000.0), 20000.0),
                 }
 
         cfg: dict[str, Any] = {}
@@ -209,26 +244,45 @@ class DashboardServer:
                 pass
 
         return {
-            "execution_mode": cfg.get("execution_mode", "PAPER"),
-            "max_concurrent_positions": int(cfg.get("max_concurrent_positions", 5)),
-            "paper_buy_amount_usd": float(cfg.get("paper_buy_amount_usd", 1.0)),
-            "wallet_balance_usd": float(cfg.get("wallet_balance_usd", cfg.get("paper_initial_wallet_usd", 10.0))),
-            "paper_initial_wallet_usd": float(cfg.get("paper_initial_wallet_usd", cfg.get("wallet_balance_usd", 10.0))),
-            "min_trade_amount_usd": float(cfg.get("min_trade_amount_usd", 1.0)),
-            "break_even_gain_pct": float(cfg.get("break_even_gain_pct", 100.0)),
-            "trailing_stop_drop_pct": float(cfg.get("trailing_stop_drop_pct", 12.0)),
-            "emergency_stop_loss_pct": float(cfg.get("emergency_stop_loss_pct", 20.0)),
-            "max_slippage_pct": float(cfg.get("max_slippage_pct", 1.5)),
-            "reentry_trailing_cooloff_min": float(cfg.get("reentry_trailing_cooloff_min", 5.0)),
-            "reentry_stoploss_cooloff_min": float(cfg.get("reentry_stoploss_cooloff_min", 30.0)),
-            "reentry_min_bounce_pct": float(cfg.get("reentry_min_bounce_pct", 3.0)),
-            "trading_strategy_mode": cfg.get("trading_strategy_mode", "DUAL"),
-            "swing_initial_stop_loss_pct": float(cfg.get("swing_initial_stop_loss_pct", 20.0)),
-            "swing_tier1_mult": float(cfg.get("swing_tier1_mult", 2.0)),
-            "swing_tier2_mult": float(cfg.get("swing_tier2_mult", 3.0)),
-            "swing_tier3_mult": float(cfg.get("swing_tier3_mult", 5.0)),
-            "swing_tier4_mult": float(cfg.get("swing_tier4_mult", 10.0)),
-            "swing_trailing_drop_pct": float(cfg.get("swing_trailing_drop_pct", 25.0)),
+            "execution_mode": cfg.get("execution_mode", "PAPER") or "PAPER",
+            "max_concurrent_positions": _safe_int(cfg.get("max_concurrent_positions"), 50),
+            "paper_buy_amount_usd": _safe_float(cfg.get("paper_buy_amount_usd"), 1.0),
+            "wallet_balance_usd": _safe_float(
+                cfg.get("wallet_balance_usd", cfg.get("paper_initial_wallet_usd")),
+                10.0,
+            ),
+            "paper_initial_wallet_usd": _safe_float(
+                cfg.get("paper_initial_wallet_usd", cfg.get("wallet_balance_usd")),
+                10.0,
+            ),
+            "min_trade_amount_usd": _safe_float(cfg.get("min_trade_amount_usd"), 1.0),
+            "max_token_age_hours": _safe_float(cfg.get("max_token_age_hours"), 3.0),
+            "break_even_gain_pct": _safe_float(cfg.get("break_even_gain_pct"), 100.0),
+            "trailing_stop_drop_pct": _safe_float(cfg.get("trailing_stop_drop_pct"), 12.0),
+            "emergency_stop_loss_pct": _safe_float(cfg.get("emergency_stop_loss_pct"), 20.0),
+            "max_slippage_pct": _safe_float(cfg.get("max_slippage_pct"), 1.5),
+            "reentry_trailing_cooloff_min": _safe_float(cfg.get("reentry_trailing_cooloff_min"), 5.0),
+            "reentry_stoploss_cooloff_min": _safe_float(cfg.get("reentry_stoploss_cooloff_min"), 30.0),
+            "reentry_min_bounce_pct": _safe_float(cfg.get("reentry_min_bounce_pct"), 3.0),
+            "trading_strategy_mode": cfg.get("trading_strategy_mode") or "DUAL",
+            "scalp_max_hold_minutes": _safe_float(cfg.get("scalp_max_hold_minutes"), 60.0),
+            "scalp_target_gain_pct": _safe_float(cfg.get("scalp_target_gain_pct"), 100.0),
+            "swing_max_hold_hours": _safe_float(cfg.get("swing_max_hold_hours"), 24.0),
+            "swing_target_gain_pct": _safe_float(cfg.get("swing_target_gain_pct"), 2000.0),
+            "swing_max_hourly_drop_pct": _safe_float(cfg.get("swing_max_hourly_drop_pct"), 15.0),
+            "swing_initial_stop_loss_pct": _safe_float(cfg.get("swing_initial_stop_loss_pct"), 0.0),
+            "swing_tier1_mult": _safe_float(cfg.get("swing_tier1_mult"), 2.0),
+            "swing_tier2_mult": _safe_float(cfg.get("swing_tier2_mult"), 4.0),
+            "swing_tier3_mult": _safe_float(cfg.get("swing_tier3_mult"), 6.0),
+            "swing_tier4_mult": _safe_float(cfg.get("swing_tier4_mult"), 11.0),
+            "swing_tier5_mult": _safe_float(cfg.get("swing_tier5_mult"), 21.0),
+            "swing_trailing_drop_pct": _safe_float(cfg.get("swing_trailing_drop_pct"), 25.0),
+            "min_token_age_scalp_min": _safe_float(cfg.get("min_token_age_scalp_min"), 30.0),
+            "min_token_age_swing_hours": _safe_float(cfg.get("min_token_age_swing_hours"), 2.0),
+            "min_volume_1h_usd": _safe_float(cfg.get("min_volume_1h_usd"), 15000.0),
+            "min_buy_ratio_5m_pct": _safe_float(cfg.get("min_buy_ratio_5m_pct"), 50.0),
+            "min_price_change_5m_pct": _safe_float(cfg.get("min_price_change_5m_pct"), -2.0),
+            "min_liquidity_swing_usd": _safe_float(cfg.get("min_liquidity_swing_usd"), 20000.0),
         }
 
     async def handle_index(self, _request: web.Request) -> web.Response:
@@ -249,17 +303,17 @@ class DashboardServer:
             try:
                 raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
-                    if "wallet_balance_usd" in raw:
-                        return float(raw["wallet_balance_usd"])
-                    if "paper_initial_wallet_usd" in raw:
-                        return float(raw["paper_initial_wallet_usd"])
+                    if "wallet_balance_usd" in raw and raw["wallet_balance_usd"] is not None:
+                        return _safe_float(raw["wallet_balance_usd"], 10.0)
+                    if "paper_initial_wallet_usd" in raw and raw["paper_initial_wallet_usd"] is not None:
+                        return _safe_float(raw["paper_initial_wallet_usd"], 10.0)
             except Exception:
                 pass
         if SESSION_FILE.exists():
             try:
                 sess_data = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
-                if isinstance(sess_data, dict) and "initial_wallet_usd" in sess_data:
-                    return float(sess_data["initial_wallet_usd"])
+                if isinstance(sess_data, dict) and sess_data.get("initial_wallet_usd") is not None:
+                    return _safe_float(sess_data["initial_wallet_usd"], 10.0)
             except Exception:
                 pass
         return 10.0
@@ -494,7 +548,8 @@ class DashboardServer:
     async def handle_bot_config(self, request: web.Request) -> web.Response:
         """Atualiza dinamicamente as configurações de risco e execução do bot."""
         try:
-            payload = await request.json()
+            raw_payload = await request.json()
+            payload = {k: v for k, v in raw_payload.items() if v is not None}
             if "wallet_balance_usd" in payload:
                 try:
                     bal_val = float(payload["wallet_balance_usd"])

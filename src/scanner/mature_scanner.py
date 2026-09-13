@@ -34,13 +34,13 @@ class MatureTokenScanner:
     def __init__(
         self,
         detection_queue: asyncio.Queue[TokenMetadata],
-        min_age_hours: float = 1.0,
-        max_age_hours: float = 5.0,
+        min_age_hours: float = 0.5,
+        max_age_hours: float = 8.0,
         poll_interval_seconds: float = 5.0,
         dexscreener_base_url: str = "https://api.dexscreener.com",
         geckoterminal_base_url: str = "https://api.geckoterminal.com",
         max_seen_cache: int = 10000,
-        enable_established_pools: bool = True,
+        enable_established_pools: bool = False,
     ) -> None:
         self.detection_queue: asyncio.Queue[TokenMetadata] = detection_queue
         self.min_age_hours: float = min_age_hours
@@ -147,7 +147,8 @@ class MatureTokenScanner:
                 hint["pair_data"] = data["pair_data"]
 
             logger.info(
-                "🌱 [TOKEN ATINGIU MATURAÇÃO (15m)] Liberando %s para fila de auditoria!",
+                "🌱 [TOKEN ATINGIU MATURAÇÃO (%.0fm)] Liberando %s para fila de auditoria!",
+                self.min_age_hours * 60.0,
                 token_addr[:8],
             )
             token, is_permanent = await self._evaluate_and_enrich_token(token_addr, hint)
@@ -566,6 +567,20 @@ class MatureTokenScanner:
                 age_hours * 60.0,
                 len(self._maturing_tokens),
             )
+        if created_ms is None:
+            created_ms = int(datetime.now(UTC).timestamp() * 1000)
+
+        self._maturing_tokens[token_address] = {
+            "created_at_ms": created_ms,
+            "hint": hint,
+            "pair_data": pair_data,
+        }
+        logger.debug(
+            "Token %s registrado na fila de maturação (idade: %.1f min). Fila ativa: %d pools.",
+            token_address,
+            age_hours * 60.0,
+            len(self._maturing_tokens),
+        )
 
     async def _query_dexscreener_pair(self, token_address: str) -> dict[str, Any] | None:
         """Consulta as pools ativas do token na DexScreener para obter o melhor par."""

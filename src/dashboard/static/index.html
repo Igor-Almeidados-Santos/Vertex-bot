@@ -785,16 +785,21 @@
         <!-- Section 2: Posições e Execução -->
         <div class="p-4 rounded-xl bg-dark-900/70 border border-dark-700 space-y-4">
           <span class="text-gray-300 font-bold uppercase tracking-wider block">🎯 Parâmetros de Entrada & Alocação</span>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div>
               <label class="text-gray-400 block mb-1">Compra por Posição (USD)</label>
               <input id="cfg-buy-usd" type="number" step="0.05" min="0.05" max="1000" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
               <span class="text-[10px] text-gray-500">Valor exato por ordem (mín: $0.05)</span>
             </div>
             <div>
-              <label class="text-gray-400 block mb-1">Slots Concomitantes (1-10)</label>
-              <input id="cfg-max-slots" type="number" min="1" max="10" step="1" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
-              <span class="text-[10px] text-gray-500">Capacidade de posições</span>
+              <label class="text-gray-400 block mb-1">Slots Concomitantes (1-50)</label>
+              <input id="cfg-max-slots" type="number" min="1" max="50" step="1" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-gray-500">Capacidade de posições (até 50)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Idade Máx. do Token (Horas)</label>
+              <input id="cfg-max-age" type="number" step="0.5" min="0.5" max="24.0" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-gray-500">Apenas tokens novos (ex: 3.0h)</span>
             </div>
             <div>
               <label class="text-gray-400 block mb-1">Slippage Máximo (%)</label>
@@ -804,14 +809,22 @@
           </div>
         </div>
 
-        <!-- Section 3: Gestão de Risco e Saída -->
-        <div class="p-4 rounded-xl bg-dark-900/70 border border-dark-700 space-y-4">
-          <span class="text-gray-300 font-bold uppercase tracking-wider block">🛡️ Gestão de Saída & Proteção de Lucro</span>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <!-- Section 3: Gestão SCALP (Saída Rápida & Janela de 1h) -->
+        <div class="p-4 rounded-xl bg-dark-900/70 border border-emerald-500/30 space-y-4">
+          <div class="flex items-center justify-between">
+            <span class="text-emerald-300 font-bold uppercase tracking-wider block">⚡ Gestão SCALP (Janela até 1h & Venda 100%)</span>
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-900/60 text-emerald-300 border border-emerald-500/30">100% Exit</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div>
-              <label class="text-gray-400 block mb-1">Break-Even Trigger (+%)</label>
-              <input id="cfg-be-gain" type="number" step="5" min="10" max="500" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
-              <span class="text-[10px] text-emerald-400">Vende 50% (+100% = 2x)</span>
+              <label class="text-gray-400 block mb-1">Tempo Máx. Scalp (min)</label>
+              <input id="cfg-scalp-max-hold" type="number" step="5" min="5" max="360" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-emerald-400">Padrão: 60 min (1h timeout)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Alvo de Lucro Scalp (+%)</label>
+              <input id="cfg-scalp-target-gain" type="number" step="5" min="10" max="500" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-emerald-400">Venda de 100% (+100% = 2x)</span>
             </div>
             <div>
               <label class="text-gray-400 block mb-1">Trailing Stop Drop (-%)</label>
@@ -820,8 +833,8 @@
             </div>
             <div>
               <label class="text-gray-400 block mb-1">Stop-Loss Emergencial (-%)</label>
-              <input id="cfg-stop-loss" type="number" step="1" min="1" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
-              <span class="text-[10px] text-rose-400">Corte do preço de entrada</span>
+              <input id="cfg-stop-loss" type="number" step="1" min="0" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-rose-400">0% = Desativado</span>
             </div>
           </div>
         </div>
@@ -829,45 +842,72 @@
         <!-- Section 3.5: Estratégias Dual-Track & Swing Ratchet -->
         <div class="p-4 rounded-xl bg-dark-900/70 border border-purple-500/30 space-y-4">
           <div class="flex items-center justify-between">
-            <span class="text-purple-300 font-bold uppercase tracking-wider block">🌊 Estratégia Dual-Track & Swing Ratchet (Catraca)</span>
-            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-900/60 text-purple-300 border border-purple-500/30">Step Trailing</span>
+            <span class="text-purple-300 font-bold uppercase tracking-wider block">🌊 Estratégia SWING (Até 24h, Alvo +2.000% & Catraca)</span>
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-900/60 text-purple-300 border border-purple-500/30">Ratchet & Hourly Check</span>
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label class="text-gray-400 block mb-1">Modo Operacional</label>
               <select id="cfg-strategy-mode" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
                 <option value="DUAL">DUAL SIMULTÂNEO (Scalp + Swing por token)</option>
-                <option value="SCALP_ONLY">APENAS SCALP (Vende 50% em 2x + Trail -12%)</option>
-                <option value="SWING_ONLY">APENAS SWING (Catraca de Degraus 2x/3x/5x)</option>
+                <option value="SCALP_ONLY">APENAS SCALP (1h Max, Alvo +100%)</option>
+                <option value="SWING_ONLY">APENAS SWING (24h Max, Alvo +2.000%)</option>
               </select>
-              <span class="text-[10px] text-gray-500">Divide cada trade em 50% Scalp e 50% Swing no modo Dual</span>
+              <span class="text-[10px] text-gray-500">Divide cada trade em Scalp e Swing</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Tempo Máx. Swing (horas)</label>
+              <input id="cfg-swing-max-hold" type="number" step="1" min="1" max="72" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">Padrão: 24 horas</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Alvo Mestre Swing (+%)</label>
+              <input id="cfg-swing-target-gain" type="number" step="100" min="100" max="5000" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">Padrão: +2.000% (21x)</span>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+            <div>
+              <label class="text-gray-400 block mb-1">Queda Máx. na Hora (-%)</label>
+              <input id="cfg-swing-hourly-drop" type="number" step="1" min="5" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-amber-400">Check a cada 1h (padrão: 15%)</span>
             </div>
             <div>
               <label class="text-gray-400 block mb-1">Swing Stop-Loss Inicial (-%)</label>
-              <input id="cfg-swing-stop" type="number" step="1" min="5" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
-              <span class="text-[10px] text-rose-400">Stop antes do Degrau 1 (ex: -20%)</span>
-            </div>
-          </div>
-          <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-1">
-            <div>
-              <label class="text-gray-400 block mb-1">Degrau 1 (Alvo x)</label>
-              <input id="cfg-swing-tier1" type="number" step="0.5" min="1.5" max="10" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
-              <span class="text-[10px] text-purple-400">2.0x (Piso no BE $x)</span>
-            </div>
-            <div>
-              <label class="text-gray-400 block mb-1">Degrau 2 (Alvo x)</label>
-              <input id="cfg-swing-tier2" type="number" step="0.5" min="2.0" max="20" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
-              <span class="text-[10px] text-purple-400">3.0x (Piso no Degrau 1 $y)</span>
-            </div>
-            <div>
-              <label class="text-gray-400 block mb-1">Degrau 3 (Alvo x)</label>
-              <input id="cfg-swing-tier3" type="number" step="0.5" min="3.0" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
-              <span class="text-[10px] text-purple-400">5.0x (Piso no Degrau 2 $z)</span>
+              <input id="cfg-swing-stop" type="number" step="1" min="0" max="80" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-emerald-400">0% = Desativado (Livre até Degrau 1)</span>
             </div>
             <div>
               <label class="text-gray-400 block mb-1">Trailing Elástico (-%)</label>
               <input id="cfg-swing-trail" type="number" step="1" min="10" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
               <span class="text-[10px] text-amber-400">Apoio de topo (ex: -25%)</span>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 pt-1">
+            <div>
+              <label class="text-gray-400 block mb-1">Degrau 1 (x)</label>
+              <input id="cfg-swing-tier1" type="number" step="0.5" min="1.5" max="10" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">2.0x (Piso BE)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Degrau 2 (x)</label>
+              <input id="cfg-swing-tier2" type="number" step="0.5" min="2.0" max="20" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">4.0x (Piso 2x)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Degrau 3 (x)</label>
+              <input id="cfg-swing-tier3" type="number" step="0.5" min="3.0" max="50" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">6.0x (Piso 4x)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Degrau 4 (x)</label>
+              <input id="cfg-swing-tier4" type="number" step="0.5" min="5.0" max="100" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">11.0x (Piso 6x)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Degrau 5 (x)</label>
+              <input id="cfg-swing-tier5" type="number" step="1.0" min="10.0" max="200" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">21.0x (Alvo Mestre)</span>
             </div>
           </div>
         </div>
@@ -890,6 +930,42 @@
               <label class="text-gray-400 block mb-1">Repique de Suporte (% min)</label>
               <input id="cfg-reentry-bounce" type="number" step="0.5" min="0.5" max="20.0" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
               <span class="text-[10px] text-gray-500">Recuperação da mínima</span>
+            </div>
+          </div>
+        </div>
+        <!-- Section 5: Filtros de Mercado & Anti-Dump (Scalp vs Swing) -->
+        <div class="p-4 rounded-xl bg-dark-900/70 border border-dark-700 space-y-4">
+          <span class="text-gray-300 font-bold uppercase tracking-wider block">🛡️ Filtros de Mercado & Proteção Anti-Dump (Scalp vs Swing)</span>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label class="text-gray-400 block mb-1">Idade Mínima SCALP (min)</label>
+              <input id="cfg-scalp-min-age" type="number" step="5" min="15" max="360" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-emerald-400">Padrão: 30 min (evita sniper dump)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Idade Mínima SWING (horas)</label>
+              <input id="cfg-swing-min-age" type="number" step="0.5" min="1.0" max="48.0" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">Padrão: 2.0h (consolidação)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Liquidez Mínima SWING ($)</label>
+              <input id="cfg-swing-min-liq" type="number" step="1000" min="5000" max="100000" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-purple-400">Padrão: $20.000 (densidade)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Volume Mínimo 1h ($)</label>
+              <input id="cfg-min-vol-1h" type="number" step="1000" min="1000" max="100000" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-cyan-400">Padrão: $15.000 (giro ativo)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Taxa Mínima Compras 5m (%)</label>
+              <input id="cfg-min-buy-ratio" type="number" step="5" min="20" max="80" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-cyan-400">Padrão: 50% (pressão compradora)</span>
+            </div>
+            <div>
+              <label class="text-gray-400 block mb-1">Variação Mínima 5m (% anti-queda)</label>
+              <input id="cfg-min-price-change" type="number" step="0.5" min="-15" max="5" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-gray-100 focus:outline-none focus:border-brand-500 font-mono">
+              <span class="text-[10px] text-amber-400">Padrão: -2.0% (evita faca caindo)</span>
             </div>
           </div>
         </div>
@@ -1132,7 +1208,9 @@
 
       const cash = parseFloat(cashVal);
       const init = currentInitialWallet > 0 ? currentInitialWallet : 10.0;
-      const diff = cash - init;
+      const active = currentActiveCapital || 0.0;
+      const equity = cash + active;
+      const diff = equity - init;
       const diffPct = ((diff / init) * 100.0).toFixed(1);
 
       equityEl.textContent = '$' + cash.toFixed(2);
@@ -1410,7 +1488,7 @@
               if (isSwing) {
                 const tier = p.ratchet_tier || 0;
                 if (tier === 0) {
-                  statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-800 text-gray-400 border border-gray-700">DEGRAU 0 (ALVO 2X)</span>';
+                  statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-950/70 text-indigo-300 border border-indigo-500/40">DEGRAU 0 (LIVRE ATÉ 2X)</span>';
                 } else if (tier === 1) {
                   statusBadge = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/40">DEGRAU 1 (BE TRAVADO)</span>';
                 } else if (tier === 2) {
@@ -1429,8 +1507,10 @@
               let stopFloorHtml = '';
               if (isSwing && p.ratchet_floor_price && parseFloat(p.ratchet_floor_price) > 0) {
                 stopFloorHtml = `<span class="text-emerald-400 font-mono font-bold" title="Piso Protegido da Catraca">$${parseFloat(p.ratchet_floor_price).toFixed(6)}</span>`;
+              } else if (isSwing && (!p.trailing_stop_price || parseFloat(p.trailing_stop_price) <= 0)) {
+                stopFloorHtml = `<span class="text-emerald-400/90 font-mono text-[11px]" title="Sem stop inicial: livre até Degrau 1 (2x)">Livre (Até 2x)</span>`;
               } else {
-                stopFloorHtml = `<span class="text-amber-400 font-mono">$${parseFloat(p.trailing_stop_price).toFixed(6)}</span>`;
+                stopFloorHtml = `<span class="text-amber-400 font-mono">$${parseFloat(p.trailing_stop_price || 0).toFixed(6)}</span>`;
               }
 
               let targetBeHtml = '';
@@ -1509,8 +1589,8 @@
                 }
               } else {
                 reasonBadge = p.status === 'STOPPED'
-                  ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800">STOP LOSS (-20%)</span>'
-                  : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950 text-blue-400 border border-blue-800">TRAILING STOP (-12%)</span>';
+                  ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800">STOP LOSS</span>'
+                  : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950 text-blue-400 border border-blue-800">TRAILING STOP</span>';
               }
 
               const shortAddr = p.token_address.slice(0, 4) + '...' + p.token_address.slice(-4);
@@ -1756,7 +1836,9 @@
         const buyInput = document.getElementById('cfg-buy-usd');
         if (buyInput) buyInput.value = s.paper_buy_amount_usd !== undefined ? s.paper_buy_amount_usd : 1.0;
         const slotsInput = document.getElementById('cfg-max-slots');
-        if (slotsInput) slotsInput.value = s.max_concurrent_positions || 5;
+        if (slotsInput) slotsInput.value = s.max_concurrent_positions || 50;
+        const maxAgeInput = document.getElementById('cfg-max-age');
+        if (maxAgeInput) maxAgeInput.value = s.max_token_age_hours !== undefined ? s.max_token_age_hours : 3.0;
         const slipInput = document.getElementById('cfg-slippage');
         if (slipInput) slipInput.value = s.max_slippage_pct || 1.5;
         const beInput = document.getElementById('cfg-be-gain');
@@ -1774,16 +1856,43 @@
 
         const stratSelect = document.getElementById('cfg-strategy-mode');
         if (stratSelect && s.trading_strategy_mode) stratSelect.value = s.trading_strategy_mode;
+        const scalpMaxHoldInput = document.getElementById('cfg-scalp-max-hold');
+        if (scalpMaxHoldInput) scalpMaxHoldInput.value = s.scalp_max_hold_minutes !== undefined ? s.scalp_max_hold_minutes : 60;
+        const scalpTargetInput = document.getElementById('cfg-scalp-target-gain');
+        if (scalpTargetInput) scalpTargetInput.value = s.scalp_target_gain_pct !== undefined ? s.scalp_target_gain_pct : 100;
+        const swingMaxHoldInput = document.getElementById('cfg-swing-max-hold');
+        if (swingMaxHoldInput) swingMaxHoldInput.value = s.swing_max_hold_hours !== undefined ? s.swing_max_hold_hours : 24;
+        const swingTargetInput = document.getElementById('cfg-swing-target-gain');
+        if (swingTargetInput) swingTargetInput.value = s.swing_target_gain_pct !== undefined ? s.swing_target_gain_pct : 2000;
+        const swingHourlyDropInput = document.getElementById('cfg-swing-hourly-drop');
+        if (swingHourlyDropInput) swingHourlyDropInput.value = s.swing_max_hourly_drop_pct !== undefined ? s.swing_max_hourly_drop_pct : 15;
         const swingStopInput = document.getElementById('cfg-swing-stop');
-        if (swingStopInput) swingStopInput.value = s.swing_initial_stop_loss_pct !== undefined ? s.swing_initial_stop_loss_pct : 20.0;
+        if (swingStopInput) swingStopInput.value = s.swing_initial_stop_loss_pct !== undefined ? s.swing_initial_stop_loss_pct : 0.0;
         const tier1Input = document.getElementById('cfg-swing-tier1');
         if (tier1Input) tier1Input.value = s.swing_tier1_mult !== undefined ? s.swing_tier1_mult : 2.0;
         const tier2Input = document.getElementById('cfg-swing-tier2');
-        if (tier2Input) tier2Input.value = s.swing_tier2_mult !== undefined ? s.swing_tier2_mult : 3.0;
+        if (tier2Input) tier2Input.value = s.swing_tier2_mult !== undefined ? s.swing_tier2_mult : 4.0;
         const tier3Input = document.getElementById('cfg-swing-tier3');
-        if (tier3Input) tier3Input.value = s.swing_tier3_mult !== undefined ? s.swing_tier3_mult : 5.0;
+        if (tier3Input) tier3Input.value = s.swing_tier3_mult !== undefined ? s.swing_tier3_mult : 6.0;
+        const tier4Input = document.getElementById('cfg-swing-tier4');
+        if (tier4Input) tier4Input.value = s.swing_tier4_mult !== undefined ? s.swing_tier4_mult : 11.0;
+        const tier5Input = document.getElementById('cfg-swing-tier5');
+        if (tier5Input) tier5Input.value = s.swing_tier5_mult !== undefined ? s.swing_tier5_mult : 21.0;
         const swingTrailInput = document.getElementById('cfg-swing-trail');
         if (swingTrailInput) swingTrailInput.value = s.swing_trailing_drop_pct !== undefined ? s.swing_trailing_drop_pct : 25.0;
+
+        const scalpMinAgeInput = document.getElementById('cfg-scalp-min-age');
+        if (scalpMinAgeInput) scalpMinAgeInput.value = s.min_token_age_scalp_min !== undefined ? s.min_token_age_scalp_min : 30;
+        const swingMinAgeInput = document.getElementById('cfg-swing-min-age');
+        if (swingMinAgeInput) swingMinAgeInput.value = s.min_token_age_swing_hours !== undefined ? s.min_token_age_swing_hours : 2.0;
+        const swingMinLiqInput = document.getElementById('cfg-swing-min-liq');
+        if (swingMinLiqInput) swingMinLiqInput.value = s.min_liquidity_swing_usd !== undefined ? s.min_liquidity_swing_usd : 20000;
+        const minVol1hInput = document.getElementById('cfg-min-vol-1h');
+        if (minVol1hInput) minVol1hInput.value = s.min_volume_1h_usd !== undefined ? s.min_volume_1h_usd : 15000;
+        const minBuyRatioInput = document.getElementById('cfg-min-buy-ratio');
+        if (minBuyRatioInput) minBuyRatioInput.value = s.min_buy_ratio_5m_pct !== undefined ? s.min_buy_ratio_5m_pct : 50;
+        const minPriceChangeInput = document.getElementById('cfg-min-price-change');
+        if (minPriceChangeInput) minPriceChangeInput.value = s.min_price_change_5m_pct !== undefined ? s.min_price_change_5m_pct : -2.0;
 
         const walletInput = document.getElementById('cfg-wallet-usd');
         if (walletInput) {
@@ -1802,39 +1911,101 @@
 
     async function saveConfig() {
       try {
-        const payload = {
-          paper_buy_amount_usd: parseFloat(document.getElementById('cfg-buy-usd').value),
-          max_concurrent_positions: parseInt(document.getElementById('cfg-max-slots').value, 10),
-          max_slippage_pct: parseFloat(document.getElementById('cfg-slippage').value),
-          break_even_gain_pct: parseFloat(document.getElementById('cfg-be-gain').value),
-          trailing_stop_drop_pct: parseFloat(document.getElementById('cfg-trailing-drop').value),
-          emergency_stop_loss_pct: parseFloat(document.getElementById('cfg-stop-loss').value),
-          reentry_trailing_cooloff_min: parseFloat(document.getElementById('cfg-cooloff-trailing').value),
-          reentry_stoploss_cooloff_min: parseFloat(document.getElementById('cfg-cooloff-stoploss').value),
-          reentry_min_bounce_pct: parseFloat(document.getElementById('cfg-reentry-bounce').value),
-        };
+        const payload = {};
+
+        const buyVal = parseFloat(document.getElementById('cfg-buy-usd')?.value);
+        if (!isNaN(buyVal)) payload.paper_buy_amount_usd = buyVal;
+
+        const slotsVal = parseInt(document.getElementById('cfg-max-slots')?.value, 10);
+        if (!isNaN(slotsVal)) payload.max_concurrent_positions = slotsVal;
+
+        const maxAgeVal = parseFloat(document.getElementById('cfg-max-age')?.value);
+        if (!isNaN(maxAgeVal)) payload.max_token_age_hours = maxAgeVal;
+
+        const slipVal = parseFloat(document.getElementById('cfg-slippage')?.value);
+        if (!isNaN(slipVal)) payload.max_slippage_pct = slipVal;
+
+        const beVal = parseFloat(document.getElementById('cfg-be-gain')?.value);
+        if (!isNaN(beVal)) payload.break_even_gain_pct = beVal;
+
+        const trailVal = parseFloat(document.getElementById('cfg-trailing-drop')?.value);
+        if (!isNaN(trailVal)) payload.trailing_stop_drop_pct = trailVal;
+
+        const stopVal = parseFloat(document.getElementById('cfg-stop-loss')?.value);
+        if (!isNaN(stopVal)) payload.emergency_stop_loss_pct = stopVal;
+
+        const coolTrailVal = parseFloat(document.getElementById('cfg-cooloff-trailing')?.value);
+        if (!isNaN(coolTrailVal)) payload.reentry_trailing_cooloff_min = coolTrailVal;
+
+        const coolStopVal = parseFloat(document.getElementById('cfg-cooloff-stoploss')?.value);
+        if (!isNaN(coolStopVal)) payload.reentry_stoploss_cooloff_min = coolStopVal;
+
+        const bounceVal = parseFloat(document.getElementById('cfg-reentry-bounce')?.value);
+        if (!isNaN(bounceVal)) payload.reentry_min_bounce_pct = bounceVal;
 
         const stratMode = document.getElementById('cfg-strategy-mode')?.value;
         if (stratMode) payload.trading_strategy_mode = stratMode;
+
+        const scalpMaxHold = parseFloat(document.getElementById('cfg-scalp-max-hold')?.value);
+        if (!isNaN(scalpMaxHold)) payload.scalp_max_hold_minutes = scalpMaxHold;
+
+        const scalpTargetGain = parseFloat(document.getElementById('cfg-scalp-target-gain')?.value);
+        if (!isNaN(scalpTargetGain)) payload.scalp_target_gain_pct = scalpTargetGain;
+
+        const swingMaxHold = parseFloat(document.getElementById('cfg-swing-max-hold')?.value);
+        if (!isNaN(swingMaxHold)) payload.swing_max_hold_hours = swingMaxHold;
+
+        const swingTargetGain = parseFloat(document.getElementById('cfg-swing-target-gain')?.value);
+        if (!isNaN(swingTargetGain)) payload.swing_target_gain_pct = swingTargetGain;
+
+        const swingHourlyDrop = parseFloat(document.getElementById('cfg-swing-hourly-drop')?.value);
+        if (!isNaN(swingHourlyDrop)) payload.swing_max_hourly_drop_pct = swingHourlyDrop;
+
         const swingStop = parseFloat(document.getElementById('cfg-swing-stop')?.value);
         if (!isNaN(swingStop)) payload.swing_initial_stop_loss_pct = swingStop;
+
         const tier1 = parseFloat(document.getElementById('cfg-swing-tier1')?.value);
         if (!isNaN(tier1)) payload.swing_tier1_mult = tier1;
+
         const tier2 = parseFloat(document.getElementById('cfg-swing-tier2')?.value);
         if (!isNaN(tier2)) payload.swing_tier2_mult = tier2;
+
         const tier3 = parseFloat(document.getElementById('cfg-swing-tier3')?.value);
         if (!isNaN(tier3)) payload.swing_tier3_mult = tier3;
+
+        const tier4 = parseFloat(document.getElementById('cfg-swing-tier4')?.value);
+        if (!isNaN(tier4)) payload.swing_tier4_mult = tier4;
+
+        const tier5 = parseFloat(document.getElementById('cfg-swing-tier5')?.value);
+        if (!isNaN(tier5)) payload.swing_tier5_mult = tier5;
+
         const swingTrail = parseFloat(document.getElementById('cfg-swing-trail')?.value);
         if (!isNaN(swingTrail)) payload.swing_trailing_drop_pct = swingTrail;
+
+        const scalpMinAge = parseFloat(document.getElementById('cfg-scalp-min-age')?.value);
+        if (!isNaN(scalpMinAge)) payload.min_token_age_scalp_min = scalpMinAge;
+
+        const swingMinAge = parseFloat(document.getElementById('cfg-swing-min-age')?.value);
+        if (!isNaN(swingMinAge)) payload.min_token_age_swing_hours = swingMinAge;
+
+        const swingMinLiq = parseFloat(document.getElementById('cfg-swing-min-liq')?.value);
+        if (!isNaN(swingMinLiq)) payload.min_liquidity_swing_usd = swingMinLiq;
+
+        const minVol1h = parseFloat(document.getElementById('cfg-min-vol-1h')?.value);
+        if (!isNaN(minVol1h)) payload.min_volume_1h_usd = minVol1h;
+
+        const minBuyRatio = parseFloat(document.getElementById('cfg-min-buy-ratio')?.value);
+        if (!isNaN(minBuyRatio)) payload.min_buy_ratio_5m_pct = minBuyRatio;
+
+        const minPriceChange = parseFloat(document.getElementById('cfg-min-price-change')?.value);
+        if (!isNaN(minPriceChange)) payload.min_price_change_5m_pct = minPriceChange;
 
         const walletInput = document.getElementById('cfg-wallet-usd');
         const walletVal = walletInput ? parseFloat(walletInput.value) : NaN;
         if (!isNaN(walletVal) && walletVal > 0) {
-          payload.wallet_balance_usd = walletVal;
           payload.paper_initial_wallet_usd = walletVal;
           currentInitialWallet = walletVal;
           try { localStorage.setItem('vertex_initial_wallet', currentInitialWallet); } catch (e) {}
-          updateWalletDisplay(currentBotStatus ? currentBotStatus.wallet_balance_usd : walletVal, currentInitialWallet, currentActiveCapital);
         }
 
         const res = await fetch('/api/bot/config', {

@@ -146,6 +146,8 @@ class PositionState(BaseModel):
     highest_price_seen: Decimal = Decimal("0.0")
     break_even_triggered: bool = False
     trailing_stop_price: Decimal = Decimal("0.0")
+    last_hourly_eval_hour: int = 0
+    hourly_peak_price: Decimal = Decimal("0.0")
     opened_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     closed_at: datetime | None = None
 
@@ -166,19 +168,41 @@ class PositionState(BaseModel):
         if data.get("highest_price_seen") is None and entry is not None:
             data["highest_price_seen"] = entry
 
-        if data.get("trailing_stop_price") is None and entry is not None:
-            drop = Decimal(str(data.get("trailing_drop_pct", "0.12")))
-            entry_dec = Decimal(str(entry))
-            data["trailing_stop_price"] = entry_dec * (Decimal("1.0") - drop)
+        strat = data.get("strategy_type", "SCALP")
+        data.setdefault("strategy_type", strat)
 
-        data.setdefault("strategy_type", "SCALP")
+        if data.get("trailing_stop_price") is None:
+            if strat == "SWING":
+                data["trailing_stop_price"] = Decimal("0.0")
+            elif entry is not None:
+                drop = Decimal(str(data.get("trailing_drop_pct", "0.12")))
+                entry_dec = Decimal(str(entry))
+                data["trailing_stop_price"] = entry_dec * (Decimal("1.0") - drop)
+
         data.setdefault("ratchet_tier", 0)
         floor = data.setdefault("ratchet_floor_price", Decimal("0.0"))
         if not isinstance(floor, Decimal):
             data["ratchet_floor_price"] = Decimal(str(floor))
 
+        data.setdefault("last_hourly_eval_hour", 0)
+        h_peak = data.setdefault("hourly_peak_price", entry if entry is not None else Decimal("0.0"))
+        if not isinstance(h_peak, Decimal):
+            data["hourly_peak_price"] = Decimal(str(h_peak))
+
         if data.get("opened_at") is None:
             data["opened_at"] = datetime.now(UTC)
+
+    def elapsed_seconds(self, now_utc: datetime | None = None) -> float:
+        """Retorna o tempo decorrido em segundos desde a abertura da posição."""
+        ref = now_utc or datetime.now(UTC)
+        opened = self.opened_at
+        if opened.tzinfo is None:
+            opened = opened.replace(tzinfo=UTC)
+        return max(0.0, (ref - opened).total_seconds())
+
+    def elapsed_hours(self, now_utc: datetime | None = None) -> float:
+        """Retorna o tempo decorrido em horas desde a abertura da posição."""
+        return self.elapsed_seconds(now_utc) / 3600.0
 
     def promote_ratchet_tier(self, new_tier: int, new_floor_price: Decimal) -> bool:
         """Promove o degrau da catraca e eleva o piso protegido monotonicamente."""

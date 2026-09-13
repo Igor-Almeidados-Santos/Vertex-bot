@@ -2,12 +2,14 @@
 Testes Unitários da API Assíncrona do Dashboard do Vertex-bot.
 """
 
+import json
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from src.dashboard import server as srv_mod
 from src.dashboard.server import create_dashboard_app
 from src.database.connection import DatabaseManager
 from src.database.models import (
@@ -294,4 +296,49 @@ async def test_dashboard_session_filtering(tmp_path: Path, monkeypatch: pytest.M
         await client.close()
         await server.close()
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_bot_status_handles_null_config_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Valida se /api/bot/status é resiliente a valores null/None em bot_config.json."""
+    db_path = str(tmp_path / "test_null_cfg.db")
+    db = DatabaseManager(db_path)
+    await db.initialize()
+
+    cfg_path = tmp_path / "bot_config.json"
+    # Grava intencionalmente chaves com valor null
+    cfg_path.write_text(
+        json.dumps({
+            "emergency_stop_loss_pct": None,
+            "paper_buy_amount_usd": None,
+            "max_concurrent_positions": None,
+            "wallet_balance_usd": None,
+            "max_token_age_hours": None,
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(srv_mod, "CONFIG_FILE", cfg_path)
+
+    app = create_dashboard_app(db, orchestrator=None)
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+
+    try:
+        resp = await client.get("/api/bot/status")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "success"
+        settings = data["data"]["settings"]
+        # Deve ter aplicado os defaults defensivos ao invés de lançar TypeError
+        assert settings["emergency_stop_loss_pct"] == 20.0
+        assert settings["paper_buy_amount_usd"] == 1.0
+        assert settings["max_concurrent_positions"] == 50
+        assert settings["max_token_age_hours"] == 3.0
+    finally:
+        await client.close()
+        await server.close()
+        await db.close()
+
 

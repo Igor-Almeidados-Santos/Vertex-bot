@@ -130,24 +130,30 @@ def create_scanner(
         from src.scanner.graduation_scanner import RaydiumGraduationScanner
         from src.scanner.mature_scanner import MatureTokenScanner
 
+        min_age_val = getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", None)
+        min_age = float(min_age_val) if isinstance(min_age_val, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.5) if isinstance(getattr(settings, "MIN_TOKEN_AGE_HOURS", None), (int, float)) else 0.5)
+        max_age_val = getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", None)
+        max_age = float(max_age_val) if isinstance(max_age_val, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 8.0) if isinstance(getattr(settings, "MAX_TOKEN_AGE_HOURS", None), (int, float)) else 8.0)
+
         logger.info(
-            "⚡ [MODO HÍBRIDO ATIVADO] Instanciando MatureTokenScanner (%.2fh a %.1fh) + RaydiumGraduationScanner em paralelo.",
-            float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.25)),
-            float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0)),
+            "⚡ [MODO HÍBRIDO ATIVADO] Instanciando MatureTokenScanner (%.2fh a %.1fh) + RaydiumGraduationScanner com incubadora anti-dump.",
+            min_age,
+            max_age,
         )
         mature_scanner = MatureTokenScanner(
             detection_queue=detection_queue,
-            min_age_hours=float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.25)),
-            max_age_hours=float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0)),
+            min_age_hours=min_age,
+            max_age_hours=max_age,
             poll_interval_seconds=float(getattr(settings, "MATURE_POOLS_POLL_INTERVAL_SEC", 5.0)),
             dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
             geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
-            enable_established_pools=bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", True)),
+            enable_established_pools=bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", False)),
         )
         graduation_scanner = RaydiumGraduationScanner(
             detection_queue=detection_queue,
             ws_url=getattr(settings, "GRADUATION_WS_URL", getattr(settings, "PUMPPORTAL_WS_URL", "wss://pumpportal.fun/api/data")),
             sol_price_usd=getattr(settings, "ESTIMATED_SOL_PRICE_USD", Decimal("150.0")),
+            incubator_scanner=mature_scanner,
         )
         return CompositeScanner([mature_scanner, graduation_scanner])
 
@@ -164,19 +170,29 @@ def create_scanner(
     elif provider == "MATURE_POOLS":
         from src.scanner.mature_scanner import MatureTokenScanner
 
+        min_age_val = getattr(settings, "MIN_TOKEN_AGE_HOURS", None)
+        if not isinstance(min_age_val, (int, float)):
+            min_age_val = getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
+        min_age = float(min_age_val) if isinstance(min_age_val, (int, float)) else 0.5
+
+        max_age_val = getattr(settings, "MAX_TOKEN_AGE_HOURS", None)
+        if not isinstance(max_age_val, (int, float)):
+            max_age_val = getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 8.0)
+        max_age = float(max_age_val) if isinstance(max_age_val, (int, float)) else 8.0
+
         logger.info(
-            "Instanciando provedor de scanner de TOKENS MADUROS/CONSOLIDADOS (Janela de %.2fh a %.1fh).",
-            float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.25)),
-            float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0)),
+            "Instanciando provedor de scanner de TOKENS MATUROS/CONSOLIDADOS (Janela de %.2fh a %.1fh).",
+            min_age,
+            max_age,
         )
         return MatureTokenScanner(
             detection_queue=detection_queue,
-            min_age_hours=float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.25)),
-            max_age_hours=float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0)),
+            min_age_hours=min_age,
+            max_age_hours=max_age,
             poll_interval_seconds=float(getattr(settings, "MATURE_POOLS_POLL_INTERVAL_SEC", 5.0)),
             dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
             geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
-            enable_established_pools=bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", True)),
+            enable_established_pools=bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", False)),
         )
     elif provider == "PUMPPORTAL":
         from src.scanner.pumpportal import PumpPortalScanner

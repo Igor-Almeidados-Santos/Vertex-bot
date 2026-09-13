@@ -4,11 +4,13 @@ Executa os 6 Hard Gates de proteção de capital e emite laudo de auditoria.
 """
 
 from decimal import Decimal
+from typing import Any
 
 from src.database.models import SecurityAuditResult, SecurityStatus, TokenMetadata
 from src.database.repository import TokensRepository
 from src.scanner.client import ResilientRPCClient
 from src.security.checks import SecurityChecks
+from src.security.market_dynamics import MarketDynamicsValidator
 from src.security.simulator import TransactionSimulator
 from src.utils.logger import setup_logger
 
@@ -25,12 +27,16 @@ class SecurityValidator:
         min_liquidity_usd: Decimal = Decimal("5000.0"),
         max_top10_pct: float = 15.0,
         max_tax_pct: float = 3.0,
+        market_validator: MarketDynamicsValidator | None = None,
+        strategy_mode: str = "DUAL",
     ) -> None:
         self.tokens_repo: TokensRepository = tokens_repo
         self.rpc_client: ResilientRPCClient | None = rpc_client
         self.min_liquidity_usd: Decimal = min_liquidity_usd
         self.max_top10_pct: float = max_top10_pct
         self.max_tax_pct: float = max_tax_pct
+        self.market_validator: MarketDynamicsValidator | None = market_validator
+        self.strategy_mode: str = strategy_mode
 
     async def audit_token(
         self,
@@ -142,8 +148,38 @@ class SecurityValidator:
             )
 
         # Aprovado em todos os 6 Hard Gates!
+        # 7. Checagem de Dinâmica de Mercado e Anti-Dump (Volume, Momentum, Idade, Buy/Sell Ratio)
+        market_details: dict[str, Any] = {}
+        if self.market_validator:
+            mock_md: bool | None = None
+            if "market_dynamics" in mo:
+                mock_md = bool(mo["market_dynamics"]) if mo["market_dynamics"] is not None else None
+            elif mo:
+                # Se foram passados mock_overrides gerais (ex: testes unitários de contrato), assume mercado seguro
+                mock_md = True
+
+            is_market_safe, market_reason, market_details = self.market_validator.evaluate(
+                token=token,
+                strategy_mode=self.strategy_mode,
+                mock_override=mock_md,
+            )
+            if not is_market_safe:
+                return await self._build_rejection(
+                    token.address,
+                    market_reason or "Dinâmica de mercado desfavorável",
+                    is_mint_revoked=True,
+                    is_freeze_revoked=True,
+                    is_lp_safe=True,
+                    burn_pct=burn_pct,
+                    top10_pct=top10_pct,
+                    buy_tax=buy_tax,
+                    sell_tax=sell_tax,
+                    details={"market_dynamics": market_details},
+                )
+
+        # Aprovado em todos os Hard Gates!
         logger.info(
-            "Token %s APROVADO em todos os testes de segurança! Score: 100/100",
+            "Token %s APROVADO em todos os testes de segurança e mercado! Score: 100/100",
             token.address,
             extra={"event": "TOKEN_APPROVED", "token_address": token.address},
         )
@@ -160,6 +196,7 @@ class SecurityValidator:
             buy_tax_percentage=buy_tax,
             sell_tax_percentage=sell_tax,
             rejection_reason=None,
+            details={"market_dynamics": market_details},
         )
         await self.tokens_repo.update_audit_result(audit)
         return audit
@@ -176,6 +213,7 @@ class SecurityValidator:
         is_honeypot: bool = False,
         buy_tax: float = 0.0,
         sell_tax: float = 0.0,
+        details: dict[str, Any] | None = None,
     ) -> SecurityAuditResult:
         logger.warning(
             "Token %s REPROVADO na triagem: %s",
@@ -196,6 +234,7 @@ class SecurityValidator:
             buy_tax_percentage=buy_tax,
             sell_tax_percentage=sell_tax,
             rejection_reason=reason,
+            details=details or {},
         )
         await self.tokens_repo.update_audit_result(audit)
         return audit

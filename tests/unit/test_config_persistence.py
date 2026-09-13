@@ -201,3 +201,148 @@ async def test_evaluate_and_execute_entry_respects_max_concurrent_positions(
         # Agora deve permitir abrir a posição
         await orch._evaluate_and_execute_entry(new_token)
         orch.execution_engine.execute_buy.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_config_persistence_with_max_token_age(mock_settings: Settings, tmp_path: Path) -> None:
+    """Valida salvamento e restauração de max_token_age_hours."""
+    custom_cfg_path = tmp_path / "bot_config.json"
+
+    with patch.object(VertexBotOrchestrator, "_get_config_path", return_value=custom_cfg_path):
+        orch1 = VertexBotOrchestrator(mock_settings)
+        assert orch1.settings.MAX_TOKEN_AGE_HOURS == 3.0
+
+        res = orch1.update_dynamic_config({"max_token_age_hours": 1.5})
+        assert res["max_token_age_hours"] == 1.5
+        assert orch1.settings.MAX_TOKEN_AGE_HOURS == 1.5
+
+        # Recarrega em nova instância
+        orch2 = VertexBotOrchestrator(mock_settings)
+        assert orch2.settings.MAX_TOKEN_AGE_HOURS == 1.5
+
+
+@pytest.mark.asyncio
+async def test_evaluate_entry_rejects_tokens_older_than_max_age(
+    mock_settings: Settings,
+    tmp_path: Path,
+) -> None:
+    """Valida se tokens com mais horas que o limite são descartados antes da compra."""
+    custom_cfg_path = tmp_path / "bot_config.json"
+
+    with patch.object(VertexBotOrchestrator, "_get_config_path", return_value=custom_cfg_path):
+        orch = VertexBotOrchestrator(mock_settings)
+        orch.settings.MAX_TOKEN_AGE_HOURS = 3.0
+        orch.execution_engine.balance_usd = Decimal("50.00")
+        orch.execution_engine.execute_buy = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+        # Token velho (6h de vida)
+        old_token = TokenMetadata(
+            address="OldToken111111111111111111111111111111111111",
+            dex="raydium",
+            initial_liquidity_usd=Decimal("15000.0"),
+            symbol="OLD",
+            raw_event={"age_hours": 6.0},
+        )
+        await orch._evaluate_and_execute_entry(old_token)
+        orch.execution_engine.execute_buy.assert_not_awaited()
+
+        # Token novo (1.2h de vida)
+        fresh_token = TokenMetadata(
+            address="FreshToken11111111111111111111111111111111111",
+            dex="raydium",
+            initial_liquidity_usd=Decimal("15000.0"),
+            symbol="FRESH",
+            raw_event={"age_hours": 1.2},
+        )
+        await orch._evaluate_and_execute_entry(fresh_token)
+        orch.execution_engine.execute_buy.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_waiting_queue_prunes_tokens_exceeding_max_age(
+    mock_settings: Settings,
+    tmp_path: Path,
+) -> None:
+    """Valida se tokens na fila de espera que ultrapassaram a idade máxima são descartados."""
+    custom_cfg_path = tmp_path / "bot_config.json"
+
+    with patch.object(VertexBotOrchestrator, "_get_config_path", return_value=custom_cfg_path):
+        orch = VertexBotOrchestrator(mock_settings)
+        orch.settings.MAX_TOKEN_AGE_HOURS = 3.0
+        orch.settings.MAX_CONCURRENT_POSITIONS = 5
+        orch.execution_engine.balance_usd = Decimal("50.00")
+        orch.is_running = True
+        orch.price_feed.fetch_prices = AsyncMock(return_value={})  # type: ignore[method-assign]
+
+        # Token com 4h na fila (idade excedida)
+        orch.waiting_tokens["StaleToken111111111111111111111111111111111"] = {
+            "address": "StaleToken111111111111111111111111111111111",
+            "symbol": "STALE",
+            "age_hours": 4.5,
+            "enqueued_at": "2026-09-13T10:00:00+00:00",
+        }
+
+        await orch._try_fill_slots_from_waiting_queue()
+        assert "StaleToken111111111111111111111111111111111" not in orch.waiting_tokens
+
+
+@pytest.mark.asyncio
+async def test_wallet_balance_reconciliation_and_protection(
+    mock_settings: Settings,
+    tmp_path: Path,
+) -> None:
+    """Valida que configurações dinâmicas não resetam o saldo livre enquanto posições estão ativas e reconcilia perfeitamente."""
+    custom_cfg_path = tmp_path / "bot_config.json"
+
+    with patch.object(VertexBotOrchestrator, "_get_config_path", return_value=custom_cfg_path):
+        orch = VertexBotOrchestrator(mock_settings)
+        await orch.db.initialize()
+        orch.is_running = True
+        orch.settings.PAPER_INITIAL_WALLET_USD = Decimal("10.00")
+        orch.execution_engine.balance_usd = Decimal("10.00")
+
+        # Salva tokens primeiro para satisfazer FOREIGN KEY
+        tok1 = TokenMetadata(address="TokenA111111111111111111111111111111111111", dex="raydium", initial_liquidity_usd=Decimal("10000"))
+        tok2 = TokenMetadata(address="TokenB111111111111111111111111111111111111", dex="raydium", initial_liquidity_usd=Decimal("10000"))
+        await orch.tokens_repo.save_detected_token(tok1)
+        await orch.tokens_repo.save_detected_token(tok2)
+
+        # Simula criação de 2 posições de $0.10 cada (total alocado = $0.20)
+        pos1 = PositionState(
+            token_address="TokenA111111111111111111111111111111111111",
+            mode=ExecutionMode.PAPER,
+            strategy_type="SCALP",
+            entry_price=Decimal("1.0"),
+            initial_token_amount=Decimal("0.1"),
+            allocated_capital_usd=Decimal("0.10"),
+            status=PositionStatus.OPEN,
+        )
+        pos2 = PositionState(
+            token_address="TokenB111111111111111111111111111111111111",
+            mode=ExecutionMode.PAPER,
+            strategy_type="SWING",
+            entry_price=Decimal("1.0"),
+            initial_token_amount=Decimal("0.1"),
+            allocated_capital_usd=Decimal("0.10"),
+            status=PositionStatus.OPEN,
+        )
+        id1 = await orch.positions_repo.create_position(pos1)
+        id2 = await orch.positions_repo.create_position(pos2)
+        pos1.id = id1
+        pos2.id = id2
+        await orch.position_tracker.register_position(pos1)
+        await orch.position_tracker.register_position(pos2)
+
+        # Saldo livre legítimo deve ser $9.80 (10.00 - 0.20)
+        reconciled = await orch.reconcile_wallet_balance()
+        assert reconciled == Decimal("9.80")
+        assert orch.execution_engine.balance_usd == Decimal("9.80")
+
+        # Se bot_config.json contiver wallet_balance_usd = 10.0 (antigo saldo inicial)
+        # uma sincronização ou reload de configuração NÃO PODE resetar o caixa livre para 10.0!
+        custom_cfg_path.write_text(json.dumps({"wallet_balance_usd": 10.0, "max_concurrent_positions": 50}), encoding="utf-8")
+        orch._sync_config_from_disk_if_present()
+
+        assert orch.execution_engine.balance_usd == Decimal("9.80")
+        assert orch.settings.MAX_CONCURRENT_POSITIONS == 50
+

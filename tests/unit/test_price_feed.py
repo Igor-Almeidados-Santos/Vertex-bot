@@ -180,26 +180,43 @@ async def test_live_price_tick_triggers_break_even_and_trailing_stop(tmp_path: A
     pos.id = pos_id
     await tracker.register_position(pos)
 
-    # 1. Preço sobe para 2x ($0.00205) -> Break-Even!
+    # 1. Preço sobe para 2x ($0.00205) -> Scalp Target Atingido (Venda de 100%!)
     await tracker.process_price_tick(pos_id, Decimal("0.00205"))
-    assert pos.break_even_triggered is True
-    assert pos.status == PositionStatus.PARTIALLY_CLOSED
-    assert pos.remaining_token_amount == Decimal("2500.0")
-
-    # 2. Preço sobe para máxima ($0.0030)
-    await tracker.process_price_tick(pos_id, Decimal("0.0030"))
-    assert pos.highest_price_seen == Decimal("0.0030")
-
-    # 3. Preço recua 15% da máxima ($0.00255) -> Trailing Stop!
-    await tracker.process_price_tick(pos_id, Decimal("0.00255"))
     assert pos.status == PositionStatus.CLOSED
     assert pos_id not in tracker.active_positions
 
-    # Verifica ordens executadas no banco
+    # Verifica ordem executada de saída total
     orders = await orders_repo.get_orders_by_position(pos_id)
-    assert len(orders) == 2
-    assert orders[0]["order_type"] == "TAKE_PROFIT_PARTIAL"
-    assert orders[1]["order_type"] == "TRAILING_STOP_EXIT"
+    assert len(orders) == 1
+    assert orders[0]["order_type"] == "TRAILING_STOP_EXIT"
+
+    # 2. Testa Trailing Stop em posição onde a cotação sobe mas não atinge 2x e recua
+    pos2 = PositionState(
+        token_address="TokenWin111111111111111111111111111111111111",
+        mode=ExecutionMode.PAPER,
+        entry_price=Decimal("0.001"),
+        initial_token_amount=Decimal("5000.0"),
+        allocated_capital_usd=Decimal("5.0"),
+        trailing_drop_pct=Decimal("0.12"),
+        status=PositionStatus.OPEN,
+    )
+    pos2_id = await pos_repo.create_position(pos2)
+    pos2.id = pos2_id
+    await tracker.register_position(pos2)
+
+    # Sobe para $0.0015 (abaixo de 2x)
+    await tracker.process_price_tick(pos2_id, Decimal("0.0015"))
+    assert pos2.highest_price_seen == Decimal("0.0015")
+    assert pos2.trailing_stop_price == Decimal("0.00132")
+
+    # Recua para $0.00130 (abaixo do trailing stop $0.00132) -> Trailing Stop!
+    await tracker.process_price_tick(pos2_id, Decimal("0.00130"))
+    assert pos2.status == PositionStatus.CLOSED
+    assert pos2_id not in tracker.active_positions
+
+    orders2 = await orders_repo.get_orders_by_position(pos2_id)
+    assert len(orders2) == 1
+    assert orders2[0]["order_type"] == "TRAILING_STOP_EXIT"
 
     await db.close()
 

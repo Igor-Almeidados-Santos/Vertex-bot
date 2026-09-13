@@ -87,8 +87,52 @@ class PositionTracker:
                 ratchet_floor_price=position.ratchet_floor_price,
             )
 
-        elif action in ("TRAILING_STOP", "EMERGENCY_STOP", "SWING_RATCHET_STOP"):
-            if action == "SWING_RATCHET_STOP":
+        elif action in (
+            "TRAILING_STOP",
+            "EMERGENCY_STOP",
+            "SWING_RATCHET_STOP",
+            "SCALP_TARGET_REACHED",
+            "SWING_TARGET_REACHED",
+            "SCALP_TIMEOUT",
+            "SWING_TIMEOUT",
+            "SWING_HOURLY_DROP",
+        ):
+            if action == "SCALP_TARGET_REACHED":
+                logger.info(
+                    "🎯 [SCALP ALVO ATINGIDO (+100%%)!] Posição #%d (%s) | Cotação dobrou para $%.8f | Realizando 100%% de lucro!",
+                    position_id,
+                    position.token_address,
+                    current_price,
+                )
+            elif action == "SWING_TARGET_REACHED":
+                logger.info(
+                    "🚀 [SWING ALVO MESTRE (+2.000%%)!] Posição #%d (%s) | Cotação atingiu 21x ($%.8f) | Realizando 100%% de lucro!",
+                    position_id,
+                    position.token_address,
+                    current_price,
+                )
+            elif action == "SCALP_TIMEOUT":
+                logger.info(
+                    "⏰ [SCALP TIMEOUT (1h)] Posição #%d (%s) | Janela de 1h expirou | Encerrando posição a mercado ($%.8f)!",
+                    position_id,
+                    position.token_address,
+                    current_price,
+                )
+            elif action == "SWING_TIMEOUT":
+                logger.info(
+                    "⏰ [SWING TIMEOUT (24h)] Posição #%d (%s) | Janela de 24h expirou | Encerrando posição a mercado ($%.8f)!",
+                    position_id,
+                    position.token_address,
+                    current_price,
+                )
+            elif action == "SWING_HOURLY_DROP":
+                logger.warning(
+                    "📉 [SWING CHECK HORÁRIO REPROVADO] Posição #%d (%s) | Queda na última hora excedeu o limite | Encerrando trade ($%.8f)!",
+                    position_id,
+                    position.token_address,
+                    current_price,
+                )
+            elif action == "SWING_RATCHET_STOP":
                 logger.info(
                     "🌊 [SWING RATCHET STOP ATIVADO!] Posição #%d (%s) | Cotação recuou para o piso do Degrau #%d ($%.8f -> $%.8f) | Fechando posição com lucro travado!",
                     position_id,
@@ -99,9 +143,10 @@ class PositionTracker:
                 )
             elif action == "TRAILING_STOP":
                 logger.info(
-                    "🔴 [TRAILING STOP ATIVADO!] Posição #%d (%s) | Recuo de 12%% da máxima ($%.8f -> $%.8f) | Fechando posição!",
+                    "🔴 [TRAILING STOP ATIVADO!] Posição #%d (%s) | Recuo de %.0f%% da máxima ($%.8f -> $%.8f) | Fechando posição!",
                     position_id,
                     position.token_address,
+                    position.trailing_drop_pct * Decimal("100.0"),
                     position.highest_price_seen,
                     current_price,
                 )
@@ -123,7 +168,18 @@ class PositionTracker:
             # 2. Atualiza estado em memória
             position.close_position(current_price, reason=action)
             # 3. Persiste no SQLite
-            status = PositionStatus.CLOSED if action in ("TRAILING_STOP", "SWING_RATCHET_STOP") else PositionStatus.STOPPED
+            status = (
+                PositionStatus.CLOSED
+                if action in (
+                    "TRAILING_STOP",
+                    "SWING_RATCHET_STOP",
+                    "SCALP_TARGET_REACHED",
+                    "SWING_TARGET_REACHED",
+                    "SCALP_TIMEOUT",
+                    "SWING_TIMEOUT",
+                )
+                else PositionStatus.STOPPED
+            )
             await self.positions_repo.close_position(
                 position_id,
                 position.realized_pnl_usd,
