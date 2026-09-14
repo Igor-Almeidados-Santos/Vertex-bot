@@ -105,6 +105,8 @@ class SecurityValidator:
             token.address,
             self.rpc_client,
             mock_pct=mo.get("top10_pct") if "top10_pct" in mo else None,  # type: ignore
+            pool_address=token.pool_address,
+            dex=token.dex,
         )
         if top10_pct > self.max_top10_pct:
             return await self._build_rejection(

@@ -283,6 +283,8 @@ class DashboardServer:
             "min_buy_ratio_5m_pct": _safe_float(cfg.get("min_buy_ratio_5m_pct"), 50.0),
             "min_price_change_5m_pct": _safe_float(cfg.get("min_price_change_5m_pct"), -2.0),
             "min_liquidity_swing_usd": _safe_float(cfg.get("min_liquidity_swing_usd"), 20000.0),
+            "max_top10_holders_pct": _safe_float(cfg.get("max_top10_holders_pct"), 15.0),
+            "min_liquidity_usd": _safe_float(cfg.get("min_liquidity_usd"), 5000.0),
         }
 
     async def handle_index(self, _request: web.Request) -> web.Response:

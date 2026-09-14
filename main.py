@@ -242,6 +242,8 @@ class VertexBotOrchestrator:
                 "min_buy_ratio_5m_pct": float(getattr(self.settings, "MIN_BUY_RATIO_5M_PCT", 50.0)),
                 "min_price_change_5m_pct": float(getattr(self.settings, "MIN_PRICE_CHANGE_5M_PCT", -2.0)),
                 "min_liquidity_swing_usd": float(getattr(self.settings, "MIN_LIQUIDITY_SWING_USD", 20000.0)),
+                "max_top10_holders_pct": float(getattr(self.settings, "MAX_TOP10_HOLDERS_PCT", 15.0)),
+                "min_liquidity_usd": float(getattr(self.settings, "MIN_LIQUIDITY_USD", 5000.0)),
             }
             cfg_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             logger.info("💾 Configurações persistidas salvas em data/bot_config.json")
@@ -439,6 +441,12 @@ class VertexBotOrchestrator:
             self.risk_manager.emergency_stop_multiplier = Decimal("1.0") - (self.settings.EMERGENCY_STOP_LOSS_PCT / Decimal("100.0"))
         if "max_slippage_pct" in payload and payload["max_slippage_pct"] is not None:
             self.settings.MAX_SLIPPAGE_PCT = Decimal(str(payload["max_slippage_pct"]))
+        if "max_top10_holders_pct" in payload and payload["max_top10_holders_pct"] is not None:
+            self.settings.MAX_TOP10_HOLDERS_PCT = Decimal(str(payload["max_top10_holders_pct"]))
+            self.validator.max_top10_pct = float(self.settings.MAX_TOP10_HOLDERS_PCT)
+        if "min_liquidity_usd" in payload and payload["min_liquidity_usd"] is not None:
+            self.settings.MIN_LIQUIDITY_USD = Decimal(str(payload["min_liquidity_usd"]))
+            self.validator.min_liquidity_usd = self.settings.MIN_LIQUIDITY_USD
 
         self._apply_swing_risk_config(payload)
 

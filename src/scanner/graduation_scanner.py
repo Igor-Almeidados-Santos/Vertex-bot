@@ -112,7 +112,6 @@ class RaydiumGraduationScanner:
                                         "liquidity_usd": str(token.initial_liquidity_usd),
                                     },
                                 )
-                                await self.detection_queue.put(token)
                                 if self.incubator_scanner and hasattr(self.incubator_scanner, "_register_maturing_candidate"):
                                     self.incubator_scanner._register_maturing_candidate(
                                         token.address,
@@ -122,6 +121,7 @@ class RaydiumGraduationScanner:
                                             "pool_address": token.pool_address,
                                             "name": token.name,
                                             "symbol": token.symbol,
+                                            "initial_liquidity_usd": str(token.initial_liquidity_usd),
                                         },
                                     )
                                     logger.info(
