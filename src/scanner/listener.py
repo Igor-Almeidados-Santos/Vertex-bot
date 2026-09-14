@@ -130,10 +130,24 @@ def create_scanner(
         from src.scanner.graduation_scanner import RaydiumGraduationScanner
         from src.scanner.mature_scanner import MatureTokenScanner
 
-        min_age_val = getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", None)
-        min_age = float(min_age_val) if isinstance(min_age_val, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS", 0.5) if isinstance(getattr(settings, "MIN_TOKEN_AGE_HOURS", None), (int, float)) else 0.5)
-        max_age_val = getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", None)
-        max_age = float(max_age_val) if isinstance(max_age_val, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS", 8.0) if isinstance(getattr(settings, "MAX_TOKEN_AGE_HOURS", None), (int, float)) else 8.0)
+        strategy_mode = str(getattr(settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+        explicit_min_age = getattr(settings, "MIN_TOKEN_AGE_HOURS", None)
+        explicit_max_age = getattr(settings, "MAX_TOKEN_AGE_HOURS", None)
+
+        if strategy_mode == "SWING_ONLY":
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 48.0))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 4.0))
+        elif strategy_mode == "SCALP_ONLY":
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 4.0))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+        else:  # "DUAL"
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 48.0))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+
+        enable_established = bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", True))
 
         logger.info(
             "⚡ [MODO HÍBRIDO ATIVADO] Instanciando MatureTokenScanner (%.2fh a %.1fh) + RaydiumGraduationScanner com incubadora anti-dump.",
@@ -147,7 +161,7 @@ def create_scanner(
             poll_interval_seconds=float(getattr(settings, "MATURE_POOLS_POLL_INTERVAL_SEC", 5.0)),
             dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
             geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
-            enable_established_pools=bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", False)),
+            enable_established_pools=enable_established,
         )
         graduation_scanner = RaydiumGraduationScanner(
             detection_queue=detection_queue,
@@ -170,15 +184,23 @@ def create_scanner(
     elif provider == "MATURE_POOLS":
         from src.scanner.mature_scanner import MatureTokenScanner
 
-        min_age_val = getattr(settings, "MIN_TOKEN_AGE_HOURS", None)
-        if not isinstance(min_age_val, (int, float)):
-            min_age_val = getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
-        min_age = float(min_age_val) if isinstance(min_age_val, (int, float)) else 0.5
+        strategy_mode = str(getattr(settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+        explicit_min_age = getattr(settings, "MIN_TOKEN_AGE_HOURS", None)
+        explicit_max_age = getattr(settings, "MAX_TOKEN_AGE_HOURS", None)
+        if strategy_mode == "SWING_ONLY":
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 48.0))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 4.0))
+        elif strategy_mode == "SCALP_ONLY":
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 4.0))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+        else:
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 48.0))
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
 
-        max_age_val = getattr(settings, "MAX_TOKEN_AGE_HOURS", None)
-        if not isinstance(max_age_val, (int, float)):
-            max_age_val = getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 8.0)
-        max_age = float(max_age_val) if isinstance(max_age_val, (int, float)) else 8.0
+        enable_established = bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", True))
 
         logger.info(
             "Instanciando provedor de scanner de TOKENS MATUROS/CONSOLIDADOS (Janela de %.2fh a %.1fh).",
@@ -192,7 +214,7 @@ def create_scanner(
             poll_interval_seconds=float(getattr(settings, "MATURE_POOLS_POLL_INTERVAL_SEC", 5.0)),
             dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
             geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
-            enable_established_pools=bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", False)),
+            enable_established_pools=enable_established,
         )
     elif provider == "PUMPPORTAL":
         from src.scanner.pumpportal import PumpPortalScanner

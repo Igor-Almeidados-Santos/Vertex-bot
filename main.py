@@ -379,12 +379,29 @@ class VertexBotOrchestrator:
     def _update_scanner_max_age(self, max_age_hours: float) -> None:
         """Propaga o limite de idade máxima do token para os scanners ativos."""
         self.settings.MAX_TOKEN_AGE_HOURS = max_age_hours
-        if hasattr(self.scanner, "scanners"):
-            for s in self.scanner.scanners:
+        if hasattr(self, "scanner"):
+            scanners = getattr(self.scanner, "scanners", [self.scanner])
+            for s in scanners:
                 if hasattr(s, "max_age_hours"):
                     s.max_age_hours = max_age_hours
-        elif hasattr(self.scanner, "max_age_hours"):
-            self.scanner.max_age_hours = max_age_hours
+                    logger.info(
+                        "⚙️ [SCANNER IDADE MÁXIMA ATUALIZADA] Scanner configurado para tokens <= %.1fh.",
+                        max_age_hours,
+                    )
+
+    def _update_scanner_min_age(self, min_age_hours: float) -> None:
+        """Propaga o limite de idade mínima do token para os scanners ativos e incubadora."""
+        self.settings.MIN_TOKEN_AGE_HOURS = min_age_hours
+        if hasattr(self, "scanner"):
+            scanners = getattr(self.scanner, "scanners", [self.scanner])
+            for s in scanners:
+                if hasattr(s, "min_age_hours"):
+                    s.min_age_hours = min_age_hours
+                    logger.info(
+                        "⚙️ [SCANNER IDADE MÍNIMA ATUALIZADA] Scanner configurado para tokens >= %.2fh (%.0f min).",
+                        min_age_hours,
+                        min_age_hours * 60.0,
+                    )
 
     def _apply_execution_config(self, payload: dict[str, Any]) -> None:
         """Aplica parâmetros de execução e dimensionamento de ordens."""
@@ -456,6 +473,18 @@ class VertexBotOrchestrator:
             mode_val = str(payload["trading_strategy_mode"]).upper()
             if mode_val in ("DUAL", "SCALP_ONLY", "SWING_ONLY"):
                 self.settings.TRADING_STRATEGY_MODE = mode_val  # type: ignore[assignment]
+                if hasattr(self, "validator"):
+                    self.validator.strategy_mode = mode_val
+                if "max_token_age_hours" not in payload:
+                    if mode_val == "SWING_ONLY":
+                        self._update_scanner_min_age(float(self.settings.MIN_TOKEN_AGE_HOURS_SWING))
+                        self._update_scanner_max_age(float(self.settings.MAX_TOKEN_AGE_HOURS_SWING))
+                    elif mode_val == "SCALP_ONLY":
+                        self._update_scanner_min_age(float(self.settings.MIN_TOKEN_AGE_HOURS_SCALP))
+                        self._update_scanner_max_age(float(self.settings.MAX_TOKEN_AGE_HOURS_SCALP))
+                    else:  # "DUAL"
+                        self._update_scanner_min_age(float(self.settings.MIN_TOKEN_AGE_HOURS_SCALP))
+                        self._update_scanner_max_age(float(self.settings.MAX_TOKEN_AGE_HOURS_SCALP))
         if "swing_max_hold_hours" in payload and payload["swing_max_hold_hours"] is not None:
             self.settings.SWING_MAX_HOLD_HOURS = float(payload["swing_max_hold_hours"])
             self.risk_manager.swing_max_hold_seconds = self.settings.SWING_MAX_HOLD_HOURS * 3600.0
@@ -494,14 +523,22 @@ class VertexBotOrchestrator:
 
     def _apply_market_dynamics_config(self, payload: dict[str, Any]) -> None:
         """Aplica parâmetros de filtros quantitativos de mercado e anti-dump."""
+        strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+
         if "min_token_age_scalp_min" in payload and payload["min_token_age_scalp_min"] is not None:
             self.settings.MIN_TOKEN_AGE_HOURS_SCALP = float(payload["min_token_age_scalp_min"]) / 60.0
             if hasattr(self, "market_validator"):
                 self.market_validator.min_age_hours_scalp = self.settings.MIN_TOKEN_AGE_HOURS_SCALP
+            if strat_mode != "SWING_ONLY":
+                self._update_scanner_min_age(self.settings.MIN_TOKEN_AGE_HOURS_SCALP)
+
         if "min_token_age_swing_hours" in payload and payload["min_token_age_swing_hours"] is not None:
             self.settings.MIN_TOKEN_AGE_HOURS_SWING = float(payload["min_token_age_swing_hours"])
             if hasattr(self, "market_validator"):
                 self.market_validator.min_age_hours_swing = self.settings.MIN_TOKEN_AGE_HOURS_SWING
+            if strat_mode == "SWING_ONLY":
+                self._update_scanner_min_age(self.settings.MIN_TOKEN_AGE_HOURS_SWING)
+
         if "min_volume_1h_usd" in payload and payload["min_volume_1h_usd"] is not None:
             self.settings.MIN_VOLUME_1H_USD = Decimal(str(payload["min_volume_1h_usd"]))
             if hasattr(self, "market_validator"):
@@ -832,13 +869,18 @@ class VertexBotOrchestrator:
 
         self.waiting_tokens[token.address] = {
             "address": token.address,
+            "token_address": token.address,
             "symbol": token.symbol or token.address[:8],
+            "token_symbol": token.symbol or token.address[:8],
             "name": token.name or "N/A",
             "chain": token.chain,
             "dex": token.dex,
             "initial_liquidity_usd": float(token.initial_liquidity_usd),
+            "liquidity_usd": float(token.initial_liquidity_usd),
             "waiting_reason": reason,
+            "reason_pending": reason,
             "enqueued_at": enqueued_at,
+            "added_at": enqueued_at,
             "last_price": raw_price,
             "age_hours": round(token_age, 2) if token_age is not None else None,
             "raw_event": token.raw_event if isinstance(token.raw_event, dict) else {},
@@ -896,10 +938,7 @@ class VertexBotOrchestrator:
 
         active_count = len(self.position_tracker.active_positions)
         max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 50))
-        strategy_mode = getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")
-        required_slots = 2 if (strategy_mode == "DUAL" and max_positions >= 2) else 1
-
-        if active_count + required_slots > max_positions:
+        if active_count >= max_positions:
             return False, 0, Decimal("0.0"), 0
 
         configured_buy = Decimal(str(getattr(self.settings, "PAPER_BUY_AMOUNT_USD", "1.0")))
@@ -909,7 +948,7 @@ class VertexBotOrchestrator:
         if self.execution_engine.balance_usd < min_required:
             return False, 0, Decimal("0.0"), 0
 
-        return True, required_slots, min_required, max_positions
+        return True, 1, min_required, max_positions
 
     def _build_waiting_token_meta(self, item: dict[str, Any], price: Decimal | None) -> TokenMetadata:
         """Reconstrói TokenMetadata a partir do item da fila de espera."""
@@ -930,11 +969,17 @@ class VertexBotOrchestrator:
 
     async def _try_fill_slots_from_waiting_queue(self) -> None:
         """Processa a fila de espera de tokens aprovados e abre posições se houver vagas e saldo."""
-        can_run, required_slots, min_required, max_positions = self._can_process_waiting_queue()
+        can_run, _, min_required, max_positions = self._can_process_waiting_queue()
         if not can_run:
             return
 
-        max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS", 3.0))
+        strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+        if strat_mode == "SWING_ONLY":
+            max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 4.0))
+        elif strat_mode == "SCALP_ONLY":
+            max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+        else:
+            max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
         now_utc = datetime.now(UTC)
 
         candidates = list(self.waiting_tokens.values())
@@ -944,7 +989,7 @@ class VertexBotOrchestrator:
         for item in candidates:
             if not self.is_running or self.is_paused:
                 break
-            if len(self.position_tracker.active_positions) + required_slots > max_positions:
+            if len(self.position_tracker.active_positions) >= max_positions:
                 break
             if self.execution_engine.balance_usd < min_required:
                 break
@@ -969,16 +1014,29 @@ class VertexBotOrchestrator:
         # 0. Sincroniza configurações mais recentes do disco para garantir conformidade com ajustes
         self._sync_config_from_disk_if_present()
 
-        # 1. Validação estrita de idade máxima do token no mercado
-        max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS", 3.0))
+        # 1. Validação estrita de idade do token no mercado (Scalp: 30m-720h, Swing: 2h-4h)
+        strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+        if strat_mode == "SWING_ONLY":
+            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0))
+            max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 4.0))
+        elif strat_mode == "SCALP_ONLY":
+            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
+            max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+        else:
+            # No modo DUAL, aceita tokens dentro da janela ampla de Scalp (0.5h a 720h)
+            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
+            max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+
         token_age = self._extract_token_age_hours(token)
-        if token_age is not None and token_age > max_age_hours:
+        if token_age is not None and (token_age < min_age_hours or token_age > max_age_hours):
             logger.warning(
-                "⌛ [TOKEN MUITO ANTIGO] Token %s (%s) possui %.2fh de mercado (> limite de %.1fh). Entrada descartada.",
+                "⌛ [IDADE FORA DA JANELA] Token %s (%s) possui %.2fh de mercado (janela permitida: %.1fh a %.1fh no modo %s). Entrada descartada.",
                 token.symbol or "N/A",
                 token.address,
                 token_age,
+                min_age_hours,
                 max_age_hours,
+                strat_mode,
             )
             if token.address in self.waiting_tokens:
                 self.waiting_tokens.pop(token.address, None)
@@ -1001,43 +1059,33 @@ class VertexBotOrchestrator:
         active_count = len(self.position_tracker.active_positions)
         available_cash = self.execution_engine.balance_usd
 
-        strategy_mode = getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")
-        required_slots = 2 if (strategy_mode == "DUAL" and max_positions >= 2) else 1
+        # 3. Determina elegibilidade de cada perna da estratégia
+        metrics = self.market_validator.extract_metrics(token) if hasattr(self, "market_validator") else {}
+        eligible_scalp = bool(metrics.get("eligible_scalp", True))
+        eligible_swing = bool(metrics.get("eligible_swing", True))
 
-        if configured_buy and configured_buy > Decimal("0.0"):
-            min_required = max(Decimal("0.05"), min(configured_buy, min_trade) - Decimal("0.05"))
-        else:
-            min_required = max(Decimal("0.50"), min_trade - Decimal("0.05"))
-
-        # 3. Se não houver slots disponíveis ou caixa suficiente, adiciona à Fila de Espera de Aprovados
-        waiting_reason: str | None = None
-        if active_count + required_slots > max_positions:
-            waiting_reason = "AGUARDANDO_SLOT"
-        elif available_cash < min_required:
-            waiting_reason = "AGUARDANDO_SALDO"
-
-        if waiting_reason:
-            self._enqueue_waiting_token(token, reason=waiting_reason)
-            logger.info(
-                "⏳ [FILA DE ESPERA] Token aprovado %s (%s) adicionado à fila. Motivo: %s | Posições: %d/%d (Precisa de %d) | Caixa: $%.2f",
+        if not eligible_scalp and not eligible_swing:
+            logger.warning(
+                "⚠️ [INELIGÍVEL] Token %s não cumpre requisitos nem de Scalp nem de Swing. Entrada descartada.",
                 token.symbol or token.address[:8],
-                token.address,
-                waiting_reason,
-                active_count,
-                max_positions,
-                required_slots,
-                available_cash,
             )
+            if token.address in self.waiting_tokens:
+                self.waiting_tokens.pop(token.address, None)
+                self._save_waiting_tokens()
             return
 
-        # 4. Se slots e caixa estão liberados, remove da fila de espera se estiver lá
-        if token.address in self.waiting_tokens:
-            self.waiting_tokens.pop(token.address, None)
-            self._save_waiting_tokens()
+        is_dual_entry = (
+            strat_mode == "DUAL"
+            and max_positions >= 2
+            and eligible_scalp
+            and eligible_swing
+        )
+        required_slots = 2 if is_dual_entry else 1
 
-        # 5. Calcula montante de compra respeitando estritamente o valor configurado em Ajustes
+        # 4. Dimensionamento de capital por posição e total necessário
         if configured_buy and configured_buy > Decimal("0.0"):
-            buy_amount_usd = min(available_cash, configured_buy)
+            base_buy_amount = configured_buy
+            base_min_required = max(Decimal("0.05"), min(configured_buy, min_trade) - Decimal("0.05"))
         else:
             active_invested = sum(
                 (p.allocated_capital_usd for p in self.position_tracker.active_positions.values()),
@@ -1045,20 +1093,55 @@ class VertexBotOrchestrator:
             )
             total_portfolio = available_cash + active_invested
             target_per_slot = total_portfolio / Decimal(max_positions)
-            buy_amount_usd = min(available_cash, max(min_required, target_per_slot))
+            base_buy_amount = max(min_trade, target_per_slot)
+            base_min_required = max(Decimal("0.50"), min_trade - Decimal("0.05"))
+
+        mult = Decimal("2.0") if is_dual_entry else Decimal("1.0")
+        min_required = base_min_required * mult
+        target_total_capital = base_buy_amount * mult
+
+        # 5. Se não houver slots disponíveis ou caixa suficiente, enfileira na Fila de Espera
+        waiting_reason: str | None = None
+        if active_count + required_slots > max_positions:
+            waiting_reason = "AGUARDANDO_SLOT"
+        elif available_cash < min_required or available_cash < target_total_capital:
+            waiting_reason = "AGUARDANDO_SALDO"
+
+        if waiting_reason:
+            self._enqueue_waiting_token(token, reason=waiting_reason)
+            logger.info(
+                "⏳ [FILA DE ESPERA] Token aprovado %s (%s) adicionado à fila. Motivo: %s | Posições: %d/%d (Precisa de %d) | Caixa: $%.2f (Precisa de $%.2f)",
+                token.symbol or token.address[:8],
+                token.address,
+                waiting_reason,
+                active_count,
+                max_positions,
+                required_slots,
+                available_cash,
+                target_total_capital,
+            )
+            return
+
+        # 6. Se slots e caixa estão liberados, remove da fila de espera se estiver lá
+        if token.address in self.waiting_tokens:
+            self.waiting_tokens.pop(token.address, None)
+            self._save_waiting_tokens()
+
+        buy_amount_usd = min(base_buy_amount, available_cash if not is_dual_entry else (available_cash / Decimal("2.0")))
 
         logger.info(
-            "📊 [GESTÃO DE CARTEIRA] Caixa: $%.2f | Alocando $%.2f (Modo: %s) na Posição #%d/%d (%s)",
+            "📊 [GESTÃO DE CARTEIRA] Caixa: $%.2f | Alocando $%.2f %s(Modo: %s) na Posição #%d/%d (%s)",
             available_cash,
             buy_amount_usd,
-            strategy_mode,
+            f"(x2 pernas = ${buy_amount_usd * Decimal('2.0'):.2f}) " if is_dual_entry else "",
+            strat_mode,
             active_count + 1,
             max_positions,
             token.symbol or token.address[:8],
         )
 
-        # 6. Dispara compra via Execution Engine de acordo com a estratégia ativa
-        await self._dispatch_entry_orders(token, buy_amount_usd, strategy_mode, max_positions)
+        # 7. Dispara compra via Execution Engine de acordo com a estratégia ativa
+        await self._dispatch_entry_orders(token, buy_amount_usd, strat_mode, max_positions)
 
     async def _dispatch_entry_orders(
         self,
@@ -1074,13 +1157,11 @@ class VertexBotOrchestrator:
 
         if strategy_mode == "DUAL" and max_positions >= 2:
             if eligible_scalp and eligible_swing:
-                half_amount = buy_amount_usd / Decimal("2.0")
-                if half_amount >= Decimal("0.05"):
-                    await self._execute_dual_track_entry(token, half_amount)
-                    return
+                await self._execute_dual_track_entry(token, buy_amount_usd)
+                return
             elif eligible_scalp and not eligible_swing:
                 logger.info(
-                    "🎯 [MODO DUAL -> SCALP] Token %s qualificado para Scalp (30m-4h). Abrindo perna de Scalp.",
+                    "🎯 [MODO DUAL -> SCALP] Token %s qualificado para Scalp (30m-720h). Abrindo perna de Scalp.",
                     token.symbol or token.address[:8],
                 )
                 pos_scalp = await self.execution_engine.execute_buy(
@@ -1094,7 +1175,7 @@ class VertexBotOrchestrator:
                 return
             elif eligible_swing and not eligible_scalp:
                 logger.info(
-                    "🏛️ [MODO DUAL -> SWING] Token %s consolidado para Swing (2h+ / Liq $20k+). Abrindo perna de Swing.",
+                    "🏛️ [MODO DUAL -> SWING] Token %s consolidado para Swing (2h-4h / Liq $20k+). Abrindo perna de Swing.",
                     token.symbol or token.address[:8],
                 )
                 pos_swing = await self.execution_engine.execute_buy(
@@ -1125,17 +1206,17 @@ class VertexBotOrchestrator:
                 self.telemetry.record_trade_opened()
                 await self.position_tracker.register_position(pos_scalp)
 
-    async def _execute_dual_track_entry(self, token: TokenMetadata, half_amount: Decimal) -> None:
-        """Abre posições simultâneas SCALP e SWING no modo Dual-Track."""
+    async def _execute_dual_track_entry(self, token: TokenMetadata, buy_amount_usd: Decimal) -> None:
+        """Abre posições simultâneas SCALP e SWING no modo Dual-Track com valor integral em cada perna."""
         logger.info(
             "⚡ [DUAL-TRACK ENTRY] Abrindo Posição SCALP ($%.2f) e Posição SWING ($%.2f) para %s",
-            half_amount,
-            half_amount,
+            buy_amount_usd,
+            buy_amount_usd,
             token.symbol or token.address[:8],
         )
         pos_scalp = await self.execution_engine.execute_buy(
             token,
-            amount_usd=half_amount,
+            amount_usd=buy_amount_usd,
             strategy_type="SCALP",
         )
         if pos_scalp:
@@ -1144,12 +1225,13 @@ class VertexBotOrchestrator:
 
         pos_swing = await self.execution_engine.execute_buy(
             token,
-            amount_usd=half_amount,
+            amount_usd=buy_amount_usd,
             strategy_type="SWING",
         )
         if pos_swing:
             self.telemetry.record_trade_opened()
             await self.position_tracker.register_position(pos_swing)
+
 
     async def _handle_position_closed(self, position: PositionState) -> None:
         """Notificado quando uma posição é 100% liquidada (Trailing Stop ou Stop Loss)."""

@@ -238,7 +238,7 @@ async def test_dual_track_entry_orchestration(tmp_path: Path) -> None:
         strategy_type="SCALP",
         entry_price=Decimal("1.0"),
         initial_token_amount=Decimal("2.0"),
-        allocated_capital_usd=Decimal("2.00"),
+        allocated_capital_usd=Decimal("4.00"),
     )
     pos_swing = PositionState(
         id=2,
@@ -246,20 +246,20 @@ async def test_dual_track_entry_orchestration(tmp_path: Path) -> None:
         mode=ExecutionMode.PAPER,
         strategy_type="SWING",
         entry_price=Decimal("1.0"),
-        initial_token_amount=Decimal("2.0"),
-        allocated_capital_usd=Decimal("2.00"),
+        initial_token_amount=Decimal("4.0"),
+        allocated_capital_usd=Decimal("4.00"),
     )
 
     orch.execution_engine.execute_buy = AsyncMock(side_effect=[pos_scalp, pos_swing])  # type: ignore[method-assign]
 
     await orch._evaluate_and_execute_entry(token)
 
-    # Verifica que foram disparadas 2 compras (uma SCALP e uma SWING) dividindo os $4.00 em $2.00 cada
+    # Verifica que foram disparadas 2 compras (uma SCALP e uma SWING) com o valor integral de $4.00 para cada perna
     assert orch.execution_engine.execute_buy.await_count == 2
     calls = orch.execution_engine.execute_buy.await_args_list
-    assert calls[0].kwargs["amount_usd"] == Decimal("2.00")
+    assert calls[0].kwargs["amount_usd"] == Decimal("4.00")
     assert calls[0].kwargs["strategy_type"] == "SCALP"
-    assert calls[1].kwargs["amount_usd"] == Decimal("2.00")
+    assert calls[1].kwargs["amount_usd"] == Decimal("4.00")
     assert calls[1].kwargs["strategy_type"] == "SWING"
 
     # Confirma que ambas foram registradas no position_tracker

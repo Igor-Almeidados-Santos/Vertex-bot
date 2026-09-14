@@ -22,9 +22,9 @@ class Settings(BaseSettings):
 
     # === PROVEDOR DE INGESTÃO (SCANNER) ===
     SCANNER_PROVIDER: Literal["MATURE_POOLS", "INDEXED", "RAW_RPC", "PUMPPORTAL", "HYBRID", "GRADUATIONS"] = "HYBRID"
-    MIN_TOKEN_AGE_HOURS: float = 0.25  # 15 minutos de existência
-    MAX_TOKEN_AGE_HOURS: float = 3.0   # Até 3 horas (Fresh tokens / Alto potencial de multiplicação inicial)
-    ENABLE_ESTABLISHED_POOLS: bool = False  # Foca em tokens recém-nascidos/graduados e desativa pools antigas
+    MIN_TOKEN_AGE_HOURS: float = 0.5   # 30 minutos de existência
+    MAX_TOKEN_AGE_HOURS: float = 720.0 # Até 720 horas (1 mês) para Scalp consolidado
+    ENABLE_ESTABLISHED_POOLS: bool = True  # Ativa busca de pools consolidadas e trending
     MATURE_POOLS_POLL_INTERVAL_SEC: float = 5.0
     WATCHLIST_POLL_INTERVAL_SEC: float = 25.0  # Intervalo de verificação de reentrada na watchlist
     WATCHLIST_RETRY_COOLDOWN_SEC: float = 60.0  # Cooldown por token na watchlist
@@ -95,9 +95,9 @@ class Settings(BaseSettings):
 
     # === PARÂMETROS DE DINÂMICA DE MERCADO (ANTI-DUMP & SELEÇÃO) ===
     MIN_TOKEN_AGE_HOURS_SCALP: float = 0.5   # 30 minutos (evita zona de morte de snipers)
-    MAX_TOKEN_AGE_HOURS_SCALP: float = 4.0   # Até 4 horas
+    MAX_TOKEN_AGE_HOURS_SCALP: float = 720.0 # Até 720 horas (1 mês) para Scalp consolidado
     MIN_TOKEN_AGE_HOURS_SWING: float = 2.0   # Mínimo 2 horas de consolidação
-    MAX_TOKEN_AGE_HOURS_SWING: float = 48.0  # Até 48 horas (ou dias)
+    MAX_TOKEN_AGE_HOURS_SWING: float = 4.0   # Máximo 4 horas na entrada de Swing
     MIN_VOLUME_1H_USD: Decimal = Decimal("15000.0")  # Giro mínimo em 1h
     MIN_BUY_RATIO_5M_PCT: Decimal = Decimal("50.0")  # Ao menos 50% de compras em 5m
     MIN_PRICE_CHANGE_5M_PCT: Decimal = Decimal("-2.0")  # Não comprar em queda livre

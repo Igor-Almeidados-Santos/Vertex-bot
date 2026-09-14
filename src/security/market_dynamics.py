@@ -23,9 +23,9 @@ class MarketDynamicsValidator:
         min_buy_ratio_5m_pct: Decimal = Decimal("50.0"),
         min_price_change_5m_pct: Decimal = Decimal("-2.0"),
         min_age_hours_scalp: float = 0.5,
-        max_age_hours_scalp: float = 4.0,
+        max_age_hours_scalp: float = 720.0,
         min_age_hours_swing: float = 2.0,
-        max_age_hours_swing: float = 48.0,
+        max_age_hours_swing: float = 4.0,
         min_liquidity_scalp_usd: Decimal = Decimal("5000.0"),
         min_liquidity_swing_usd: Decimal = Decimal("20000.0"),
     ) -> None:
@@ -196,6 +196,7 @@ class MarketDynamicsValidator:
                     reason = (
                         f"Idade do token ({age_hours:.1f}h) acima do teto para Scalp "
                         f"({self.max_age_hours_scalp:.1f}h)"
+                        f"({self.max_age_hours_scalp:.1f}h / 30 dias)"
                     )
                 else:
                     reason = (
@@ -211,11 +212,15 @@ class MarketDynamicsValidator:
                     reason = (
                         f"Idade do token ({age_hours:.1f}h) abaixo do mínimo para Swing "
                         f"({self.min_age_hours_swing:.1f}h) - Falta de consolidação"
+                        f"Idade do token ({age_hours:.1f}h) abaixo da janela de entrada para Swing "
+                        f"({self.min_age_hours_swing:.1f}h a {self.max_age_hours_swing:.1f}h) - Falta de consolidação"
                     )
                 elif age_hours is not None and age_hours > self.max_age_hours_swing:
                     reason = (
                         f"Idade do token ({age_hours:.1f}h) acima do teto para Swing "
                         f"({self.max_age_hours_swing:.1f}h)"
+                        f"Idade do token ({age_hours:.1f}h) fora da janela de entrada para Swing "
+                        f"({self.min_age_hours_swing:.1f}h a {self.max_age_hours_swing:.1f}h)"
                     )
                 else:
                     reason = (
@@ -231,6 +236,11 @@ class MarketDynamicsValidator:
                     reason = (
                         f"Idade do token ({age_hours * 60.0:.0f}m) abaixo do mínimo de segurança "
                         f"({self.min_age_hours_scalp * 60.0:.0f}m) - Risco de sniper dump"
+                    )
+                elif age_hours is not None and age_hours > self.max_age_hours_scalp:
+                    reason = (
+                        f"Idade do token ({age_hours:.1f}h) excede o teto máximo de mercado "
+                        f"({self.max_age_hours_scalp:.1f}h / 30 dias)"
                     )
                 else:
                     age_str = f"{age_hours:.1f}h" if age_hours is not None else "N/D"

@@ -135,8 +135,14 @@ class TokensRepository:
         params: list[Any] = []
 
         if status_filter and status_filter.upper() != "ALL":
+            status_map = {
+                "APROVADO": "APPROVED",
+                "REJEITADO": "REJECTED",
+                "PENDENTE": "PENDING",
+            }
+            norm_status = status_map.get(status_filter.upper(), status_filter.upper())
             conditions.append("security_status = ?")
-            params.append(status_filter.upper())
+            params.append(norm_status)
 
         if search:
             search_pattern = f"%{search}%"
@@ -159,7 +165,14 @@ class TokensRepository:
         """
         params.append(limit)
         rows = await self.db.fetchall(query, tuple(params))
-        return [dict(r) for r in rows]
+        tokens: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            d["status"] = d.get("security_status") or "PENDING"
+            d["cataloged_at"] = d.get("detection_timestamp") or ""
+            d["score"] = d.get("security_score")
+            tokens.append(d)
+        return tokens
 
     async def get_approved_watchlist_candidates(
         self,
@@ -207,8 +220,16 @@ class TokensRepository:
     async def get_tokens_summary(self, since: datetime | None = None) -> dict[str, Any]:
         """Calcula métricas agregadas de triagem de tokens, com suporte opcional a filtro de sessão."""
         all_time_total_query = "SELECT COUNT(*) as count FROM tokens_catalogados"
+        all_time_appr_query = "SELECT COUNT(*) as count FROM tokens_catalogados WHERE security_status = 'APPROVED'"
+        all_time_rej_query = "SELECT COUNT(*) as count FROM tokens_catalogados WHERE security_status = 'REJECTED'"
+
         all_time_row = await self.db.fetchone(all_time_total_query)
+        all_time_appr_row = await self.db.fetchone(all_time_appr_query)
+        all_time_rej_row = await self.db.fetchone(all_time_rej_query)
+
         all_time_total = all_time_row[0] if all_time_row else 0
+        all_time_approved = all_time_appr_row[0] if all_time_appr_row else 0
+        all_time_rejected = all_time_rej_row[0] if all_time_rej_row else 0
 
         since_iso = since.isoformat() if since is not None else None
 
@@ -228,10 +249,13 @@ class TokensRepository:
             appr_row = await self.db.fetchone(approved_query, (since_iso,))
             rej_row = await self.db.fetchone(rejected_query, (since_iso,))
             reasons_rows = await self.db.fetchall(reasons_query, (since_iso,))
+            total = total_row[0] if total_row else 0
+            approved = appr_row[0] if appr_row else 0
+            rejected = rej_row[0] if rej_row else 0
         else:
-            total_query = "SELECT COUNT(*) as count FROM tokens_catalogados"
-            approved_query = "SELECT COUNT(*) as count FROM tokens_catalogados WHERE security_status = 'APPROVED'"
-            rejected_query = "SELECT COUNT(*) as count FROM tokens_catalogados WHERE security_status = 'REJECTED'"
+            total = all_time_total
+            approved = all_time_approved
+            rejected = all_time_rejected
             reasons_query = """
             SELECT rejection_reason, COUNT(*) as count
             FROM tokens_catalogados
@@ -240,21 +264,19 @@ class TokensRepository:
             ORDER BY count DESC
             LIMIT 10
             """
-            total_row = await self.db.fetchone(total_query)
-            appr_row = await self.db.fetchone(approved_query)
-            rej_row = await self.db.fetchone(rejected_query)
             reasons_rows = await self.db.fetchall(reasons_query)
 
-        total = total_row[0] if total_row else 0
-        approved = appr_row[0] if appr_row else 0
-        rejected = rej_row[0] if rej_row else 0
         reasons_dict = {str(row[0]): int(row[1]) for row in reasons_rows}
 
         return {
             "total_scanned": total,
             "approved": approved,
             "rejected": rejected,
+            "total_approved": approved,
+            "total_rejected": rejected,
             "all_time_cataloged": all_time_total,
+            "all_time_approved": all_time_approved,
+            "all_time_rejected": all_time_rejected,
             "approval_rate_pct": round((approved / total * 100.0), 1) if total > 0 else 0.0,
             "rejection_reasons": reasons_dict,
         }
@@ -452,7 +474,13 @@ class PositionsRepository:
         """
         params.append(limit)
         rows = await self.db.fetchall(query, tuple(params))
-        return [dict(r) for r in rows]
+        positions: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            d["address"] = d.get("token_address") or ""
+            d["token_symbol"] = d.get("symbol") or ""
+            positions.append(d)
+        return positions
 
     async def get_pnl_summary(
         self,
@@ -560,14 +588,27 @@ class OrdersRepository:
     async def get_recent_orders(self, limit: int = 200) -> list[dict[str, Any]]:
         """Retorna histórico cronológico de execuções de ordens."""
         query = """
-        SELECT id, position_id, order_type, mode, price, amount, total_usd,
-               tx_hash, fee_cost_usd, slippage_realized, notes, executed_at
-        FROM ordens_executadas
-        ORDER BY id DESC
+        SELECT o.id, o.position_id, o.order_type, o.mode, o.price, o.amount, o.total_usd,
+               o.tx_hash, o.fee_cost_usd, o.slippage_realized, o.notes, o.executed_at,
+               p.token_address, t.symbol, t.name
+        FROM ordens_executadas o
+        LEFT JOIN posicoes p ON o.position_id = p.id
+        LEFT JOIN tokens_catalogados t ON p.token_address = t.address
+        ORDER BY o.id DESC
         LIMIT ?
         """
         rows = await self.db.fetchall(query, (limit,))
-        return [dict(r) for r in rows]
+        orders: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            d["token_address"] = d.get("token_address") or ""
+            d["token_symbol"] = d.get("symbol") or ""
+            d["tokens_amount"] = d.get("amount") or 0.0
+            d["amount_usd"] = d.get("total_usd") or 0.0
+            d["timestamp"] = d.get("executed_at") or ""
+            d["reason"] = d.get("notes") or ""
+            orders.append(d)
+        return orders
 
     async def get_orders_by_position(self, position_id: int) -> list[dict[str, Any]]:
         """Retorna todas as ordens vinculadas a uma posição específica."""

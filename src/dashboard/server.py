@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import web
+from aiohttp.typedefs import Handler
 
 from src.database.connection import DatabaseManager
 from src.database.repository import OrdersRepository, PositionsRepository, TokensRepository
@@ -66,6 +67,7 @@ class DashboardServer:
         self.tokens_repo: TokensRepository = TokensRepository(db)
         self.positions_repo: PositionsRepository = PositionsRepository(db)
         self.orders_repo: OrdersRepository = OrdersRepository(db)
+        self._active_ws_clients: set[web.WebSocketResponse] = set()
 
     def _get_session_start(self) -> datetime | None:
         """Lê o timestamp de início da sessão simulada para zeragem visual."""
@@ -178,20 +180,43 @@ class DashboardServer:
 
     def _get_waiting_tokens(self) -> list[dict[str, Any]]:
         """Retorna lista de tokens aprovados aguardando liberação de slots."""
+        raw_list: list[dict[str, Any]] = []
         if self.orchestrator:
             waiting = getattr(self.orchestrator, "waiting_tokens", None)
             if isinstance(waiting, dict):
-                return list(waiting.values())
-
-        w_file = Path("data/waiting_tokens.json")
-        if w_file.exists():
+                raw_list = list(waiting.values())
+        elif Path("data/waiting_tokens.json").exists():
             try:
-                raw = json.loads(w_file.read_text(encoding="utf-8"))
+                raw = json.loads(Path("data/waiting_tokens.json").read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
-                    return list(raw.values())
+                    raw_list = list(raw.values())
             except Exception:
                 pass
-        return []
+
+        normalized: list[dict[str, Any]] = []
+        for t in raw_list:
+            item = dict(t)
+            addr = str(item.get("address") or item.get("token_address") or "")
+            sym = str(item.get("symbol") or item.get("token_symbol") or (addr[:8] if addr else "N/A"))
+            name = str(item.get("name") or "N/A")
+            liq = float(item.get("initial_liquidity_usd") or item.get("liquidity_usd") or 0.0)
+            reason = str(item.get("waiting_reason") or item.get("reason_pending") or "AGUARDANDO_SLOT")
+            enq = str(item.get("enqueued_at") or item.get("added_at") or "")
+
+            item["address"] = addr
+            item["token_address"] = addr
+            item["symbol"] = sym
+            item["token_symbol"] = sym
+            item["name"] = name
+            item["initial_liquidity_usd"] = liq
+            item["liquidity_usd"] = liq
+            item["waiting_reason"] = reason
+            item["reason_pending"] = reason
+            item["enqueued_at"] = enq
+            item["added_at"] = enq
+            normalized.append(item)
+
+        return normalized
 
     def _get_active_settings(self) -> dict[str, Any]:
         """Retorna dicionário com os parâmetros ativos do bot."""
@@ -298,6 +323,19 @@ class DashboardServer:
             )
         content = html_file.read_text(encoding="utf-8")
         return web.Response(text=content, content_type="text/html")
+
+    async def handle_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """Endpoint WebSocket para streaming assíncrono de eventos e status."""
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        self._active_ws_clients.add(ws)
+        try:
+            await ws.send_json({"type": "connected", "message": "WebSocket conectado ao Vertex-bot"})
+            async for _ in ws:
+                pass
+        finally:
+            self._active_ws_clients.discard(ws)
+        return ws
 
     def _get_decoupled_initial_wallet(self) -> float:
         """Obtém a banca inicial configurada quando em modo desacoplado."""
@@ -408,7 +446,8 @@ class DashboardServer:
             status_filter = request.query.get("status")
             search = request.query.get("search")
             all_time = request.query.get("all_time", "").lower() in ("true", "1")
-            session_start = None if all_time else self._get_session_start()
+            session_only = request.query.get("session_only", "").lower() in ("true", "1")
+            session_start = self._get_session_start() if (session_only or not all_time) else None
 
             tokens = await self.tokens_repo.get_recent_tokens(
                 limit=limit,
@@ -416,6 +455,14 @@ class DashboardServer:
                 search=search,
                 since=session_start,
             )
+
+            if not tokens and session_start is not None and not session_only:
+                tokens = await self.tokens_repo.get_recent_tokens(
+                    limit=limit,
+                    status_filter=status_filter,
+                    search=search,
+                    since=None,
+                )
 
             return web.json_response({"status": "success", "data": tokens})
         except Exception as exc:
@@ -596,12 +643,26 @@ class DashboardServer:
             return web.json_response({"status": "error", "message": str(exc)}, status=400)
 
 
+@web.middleware
+async def cors_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    """Habilita CORS para permitir desenvolvimento e integração desacoplada do frontend."""
+    if request.method == "OPTIONS":
+        resp: web.StreamResponse = web.Response(status=200)
+    else:
+        resp = await handler(request)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return resp
+
+
 def create_dashboard_app(db: DatabaseManager, orchestrator: Any | None = None) -> web.Application:
     """Fábrica para instanciar a aplicação web com todas as rotas configuradas."""
     server = DashboardServer(db, orchestrator=orchestrator)
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
 
     app.router.add_get("/", server.handle_index)
+    app.router.add_get("/ws", server.handle_ws)
     app.router.add_get("/api/summary", server.handle_summary)
     app.router.add_get("/api/positions", server.handle_positions)
     app.router.add_get("/api/orders", server.handle_orders)
@@ -617,6 +678,12 @@ def create_dashboard_app(db: DatabaseManager, orchestrator: Any | None = None) -
     app.router.add_post("/api/bot/stop", server.handle_bot_stop)
     app.router.add_post("/api/bot/config", server.handle_bot_config)
     app.router.add_post("/api/wallet/deposit", server.handle_wallet_deposit)
+
+    # Suporte a arquivos estáticos do bundle Next.js
+    if (STATIC_DIR / "_next").exists():
+        app.router.add_static("/_next", STATIC_DIR / "_next")
+    if STATIC_DIR.exists():
+        app.router.add_static("/static", STATIC_DIR)
 
     return app
 

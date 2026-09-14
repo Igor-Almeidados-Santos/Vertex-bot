@@ -27,6 +27,7 @@ def mock_settings(tmp_path: Path) -> Settings:
         PAPER_BUY_AMOUNT_USD=Decimal("1.0"),
         MAX_CONCURRENT_POSITIONS=5,
         MIN_TRADE_AMOUNT_USD=Decimal("1.0"),
+        MAX_TOKEN_AGE_HOURS=3.0,
         BREAK_EVEN_GAIN_PCT=Decimal("100.0"),
         TRAILING_STOP_DROP_PCT=Decimal("12.0"),
         EMERGENCY_STOP_LOSS_PCT=Decimal("20.0"),
@@ -226,33 +227,33 @@ async def test_evaluate_entry_rejects_tokens_older_than_max_age(
     mock_settings: Settings,
     tmp_path: Path,
 ) -> None:
-    """Valida se tokens com mais horas que o limite são descartados antes da compra."""
+    """Valida se tokens fora da janela da estratégia (SWING: 2h-4h, SCALP: 30m-720h) são descartados."""
     custom_cfg_path = tmp_path / "bot_config.json"
 
     with patch.object(VertexBotOrchestrator, "_get_config_path", return_value=custom_cfg_path):
         orch = VertexBotOrchestrator(mock_settings)
-        orch.settings.MAX_TOKEN_AGE_HOURS = 3.0
+        orch.settings.TRADING_STRATEGY_MODE = "SWING_ONLY"  # type: ignore[assignment]
         orch.execution_engine.balance_usd = Decimal("50.00")
         orch.execution_engine.execute_buy = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
-        # Token velho (6h de vida)
+        # Token velho para Swing (6h de vida > 4.0h limite)
         old_token = TokenMetadata(
             address="OldToken111111111111111111111111111111111111",
             dex="raydium",
-            initial_liquidity_usd=Decimal("15000.0"),
+            initial_liquidity_usd=Decimal("25000.0"),
             symbol="OLD",
             raw_event={"age_hours": 6.0},
         )
         await orch._evaluate_and_execute_entry(old_token)
         orch.execution_engine.execute_buy.assert_not_awaited()
 
-        # Token novo (1.2h de vida)
+        # Token dentro da janela Swing (3.0h de vida, janela 2h-4h)
         fresh_token = TokenMetadata(
             address="FreshToken11111111111111111111111111111111111",
             dex="raydium",
-            initial_liquidity_usd=Decimal("15000.0"),
+            initial_liquidity_usd=Decimal("25000.0"),
             symbol="FRESH",
-            raw_event={"age_hours": 1.2},
+            raw_event={"age_hours": 3.0},
         )
         await orch._evaluate_and_execute_entry(fresh_token)
         orch.execution_engine.execute_buy.assert_awaited_once()
@@ -263,18 +264,18 @@ async def test_waiting_queue_prunes_tokens_exceeding_max_age(
     mock_settings: Settings,
     tmp_path: Path,
 ) -> None:
-    """Valida se tokens na fila de espera que ultrapassaram a idade máxima são descartados."""
+    """Valida se tokens na fila de espera que ultrapassaram a idade máxima da estratégia são descartados."""
     custom_cfg_path = tmp_path / "bot_config.json"
 
     with patch.object(VertexBotOrchestrator, "_get_config_path", return_value=custom_cfg_path):
         orch = VertexBotOrchestrator(mock_settings)
-        orch.settings.MAX_TOKEN_AGE_HOURS = 3.0
+        orch.settings.TRADING_STRATEGY_MODE = "SWING_ONLY"  # type: ignore[assignment]
         orch.settings.MAX_CONCURRENT_POSITIONS = 5
         orch.execution_engine.balance_usd = Decimal("50.00")
         orch.is_running = True
         orch.price_feed.fetch_prices = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-        # Token com 4h na fila (idade excedida)
+        # Token com 4.5h na fila (idade excedida para Swing: limite 4.0h)
         orch.waiting_tokens["StaleToken111111111111111111111111111111111"] = {
             "address": "StaleToken111111111111111111111111111111111",
             "symbol": "STALE",

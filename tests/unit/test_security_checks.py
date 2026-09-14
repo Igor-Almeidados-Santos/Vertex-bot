@@ -176,3 +176,4 @@ async def test_check_top10_concentration_excludes_burned_tokens() -> None:
     # Top 10 private = 50M
     # Concentration = 50M / 500M = 10.0%
     assert pct == 10.0
+
