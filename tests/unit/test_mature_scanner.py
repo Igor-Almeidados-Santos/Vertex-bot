@@ -219,3 +219,157 @@ async def test_maturing_pipeline_release() -> None:
     assert matured_token.symbol == "YOUNG"
     assert "token_young" not in scanner._maturing_tokens
     assert "token_young" in scanner._seen_addresses
+
+
+async def test_re_evaluation_for_swing_after_scalp() -> None:
+    """Valida que um token visto no estágio de Scalp (0.5h) é reavaliado e liberado quando atinge Swing (2.5h)."""
+    queue: asyncio.Queue[TokenMetadata] = asyncio.Queue()
+    scanner = MatureTokenScanner(
+        detection_queue=queue,
+        min_age_hours=0.5,
+        max_age_hours=720.0,
+        min_age_hours_swing=2.0,
+        max_age_hours_swing=6.0,
+        min_liquidity_usd=Decimal("5000.0"),
+        min_liquidity_swing_usd=Decimal("20000.0"),
+    )
+
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    thirty_min_ago_ms = now_ms - int(0.5 * 3600 * 1000)
+
+    scalp_pair = {
+        "chainId": "solana",
+        "dexId": "raydium",
+        "pairAddress": "pool_scalp",
+        "baseToken": {"address": "token_dual", "symbol": "DUAL"},
+        "liquidity": {"usd": 8000.0},  # Válido para Scalp ($8k >= $5k), mas < $15k para incubadora direta de Swing
+        "pairCreatedAt": thirty_min_ago_ms,
+    }
+
+    # 1. Primeira avaliação aos 30 minutos (Scalp)
+    await scanner._process_single_candidate("token_dual", {"pair_data": scalp_pair})
+    assert not queue.empty()
+    token_scalp = await queue.get()
+    assert token_scalp.address == "token_dual"
+    assert "token_dual" in scanner._seen_addresses
+    assert "token_dual" in scanner._seen_scalp
+    assert "token_dual" not in scanner._seen_swing
+
+    # 2. Re-tentativa antes de 2.0h -> _is_candidate_needed deve retornar False para evitar spam
+    assert scanner._is_candidate_needed("token_dual") is False
+
+    # 3. Token atinge 2.5 horas de vida
+    two_and_half_hours_ago_ms = now_ms - int(2.5 * 3600 * 1000)
+    swing_pair = {
+        "chainId": "solana",
+        "dexId": "raydium",
+        "pairAddress": "pool_scalp",
+        "baseToken": {"address": "token_dual", "symbol": "DUAL"},
+        "liquidity": {"usd": 35000.0},
+        "pairCreatedAt": two_and_half_hours_ago_ms,
+    }
+
+    # Avança o relógio no tracker de idade
+    scanner._last_age_check["token_dual"] = (2.5, datetime.now(UTC).timestamp())
+    assert scanner._is_candidate_needed("token_dual") is True
+
+    # Processa novamente como candidato de Swing
+    await scanner._process_single_candidate("token_dual", {"pair_data": swing_pair})
+    assert not queue.empty()
+    token_swing = await queue.get()
+    assert token_swing.address == "token_dual"
+    assert "token_dual" in scanner._seen_swing
+    # Agora que foi avaliado para Swing, _is_candidate_needed retorna False
+    assert scanner._is_candidate_needed("token_dual") is False
+
+
+async def test_liquidity_pre_filter() -> None:
+    """Valida que tokens com liquidez conhecida inferior a $5.000 são descartados no pré-filtro."""
+    queue: asyncio.Queue[TokenMetadata] = asyncio.Queue()
+    scanner = MatureTokenScanner(
+        detection_queue=queue,
+        min_liquidity_usd=Decimal("5000.0"),
+    )
+
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    one_hour_ago_ms = now_ms - 3600 * 1000
+
+    low_liq_pair = {
+        "chainId": "solana",
+        "dexId": "raydium",
+        "pairAddress": "pool_low",
+        "baseToken": {"address": "token_low", "symbol": "LOW"},
+        "liquidity": {"usd": 1200.0},  # Abaixo de $5.000!
+        "pairCreatedAt": one_hour_ago_ms,
+    }
+
+    token, is_perm = await scanner._evaluate_and_enrich_token("token_low", {"pair_data": low_liq_pair})
+    assert token is None
+    assert is_perm is True  # Descarte permanente por liquidez insuficiente
+    assert queue.empty()
+
+
+async def test_swing_maturation_incubator_progression() -> None:
+    """Valida que tokens na incubadora com alta liquidez são promovidos para a perna de Swing aos 120 min."""
+    queue: asyncio.Queue[TokenMetadata] = asyncio.Queue()
+    scanner = MatureTokenScanner(
+        detection_queue=queue,
+        min_age_hours=0.5,
+        max_age_hours=720.0,
+        min_age_hours_swing=2.0,
+        max_age_hours_swing=6.0,
+        min_liquidity_usd=Decimal("5000.0"),
+        swing_incubator_min_liquidity_usd=Decimal("15000.0"),
+        min_liquidity_swing_usd=Decimal("20000.0"),
+    )
+
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    # Inicialmente com 10 minutos (jovem)
+    ten_min_ago_ms = now_ms - 600 * 1000
+
+    young_pair = {
+        "chainId": "solana",
+        "dexId": "raydium",
+        "pairAddress": "pool_progression",
+        "baseToken": {"address": "token_prog", "symbol": "PROG"},
+        "liquidity": {"usd": 25000.0},
+        "pairCreatedAt": ten_min_ago_ms,
+    }
+
+    # Registra na incubadora inicial de maturação (<30m)
+    await scanner._process_single_candidate("token_prog", {"pair_data": young_pair})
+    assert "token_prog" in scanner._maturing_tokens
+    assert queue.empty()
+
+    # Avança tempo para 31 minutos (liberação de Scalp)
+    thirty_one_min_ago_ms = now_ms - 31 * 60 * 1000
+    scanner._maturing_tokens["token_prog"]["created_at_ms"] = thirty_one_min_ago_ms
+    young_pair["pairCreatedAt"] = thirty_one_min_ago_ms
+
+    await scanner._check_maturing_tokens()
+    # Deve liberar para Scalp
+    assert not queue.empty()
+    scalp_token = await queue.get()
+    assert scalp_token.address == "token_prog"
+    # E como tem liq >= $15k, deve ingressar na incubadora de Swing!
+    assert "token_prog" in scanner._maturing_swing_tokens
+
+    # Simula avanço de tempo para 2.1 horas (liberação de Swing)
+    two_hours_ago_ms = now_ms - int(2.1 * 3600 * 1000)
+    scanner._maturing_swing_tokens["token_prog"]["created_at_ms"] = two_hours_ago_ms
+    young_pair["pairCreatedAt"] = two_hours_ago_ms
+
+    # Mock de consulta atualizada na DexScreener
+    async def mock_fresh_query(addr: str) -> dict[str, Any]:
+        return young_pair
+
+    scanner._query_dexscreener_pair = mock_fresh_query  # type: ignore[method-assign]
+
+    await scanner._check_maturing_tokens()
+    # Deve liberar para Swing!
+    assert not queue.empty()
+    swing_token = await queue.get()
+    assert swing_token.address == "token_prog"
+    assert "token_prog" not in scanner._maturing_swing_tokens
+    assert "token_prog" in scanner._seen_swing
+

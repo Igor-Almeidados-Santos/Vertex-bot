@@ -118,6 +118,32 @@ class WebSocketScanner:
         logger.info("Subscrições on-chain enviadas (Raydium v4 & Pump.fun).")
 
 
+def _extract_float_setting(settings: Any, attr: str, default: float) -> float:
+    """Extrai valor float de settings com fallback defensivo para testes com mocks."""
+    val = getattr(settings, attr, None)
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        try:
+            return float(val)
+        except ValueError:
+            pass
+    return default
+
+
+def _extract_decimal_setting(settings: Any, attr: str, default: Decimal) -> Decimal:
+    """Extrai valor Decimal de settings com fallback defensivo para testes com mocks."""
+    val = getattr(settings, attr, None)
+    if isinstance(val, Decimal):
+        return val
+    if isinstance(val, (int, float, str)):
+        try:
+            return Decimal(str(val))
+        except Exception:
+            pass
+    return default
+
+
 def create_scanner(
     settings: Any,
     detection_queue: asyncio.Queue[TokenMetadata],
@@ -135,29 +161,44 @@ def create_scanner(
         explicit_max_age = getattr(settings, "MAX_TOKEN_AGE_HOURS", None)
 
         if strategy_mode == "SWING_ONLY":
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 48.0))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 4.0))
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)
         elif strategy_mode == "SCALP_ONLY":
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 4.0))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0)
         else:  # "DUAL"
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 48.0))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0)
+
+        min_age_swing = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)
+        min_age_swing = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)
+        max_age_swing = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)
+        min_liq_usd = _extract_decimal_setting(settings, "MIN_LIQUIDITY_USD", Decimal("5000.0"))
+        swing_inc_liq = _extract_decimal_setting(settings, "SWING_INCUBATOR_MIN_LIQUIDITY_USD", Decimal("15000.0"))
+        min_liq_swing = _extract_decimal_setting(settings, "MIN_LIQUIDITY_SWING_USD", Decimal("20000.0"))
 
         enable_established = bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", True))
 
         logger.info(
-            "⚡ [MODO HÍBRIDO ATIVADO] Instanciando MatureTokenScanner (%.2fh a %.1fh) + RaydiumGraduationScanner com incubadora anti-dump.",
+            "⚡ [MODO HÍBRIDO ATIVADO] Instanciando MatureTokenScanner (Scalp: %.2fh-%.1fh | Swing: %.1fh-%.1fh) + RaydiumGraduationScanner com incubadora anti-dump.",
             min_age,
             max_age,
+            min_age_swing,
+            max_age_swing,
         )
         mature_scanner = MatureTokenScanner(
             detection_queue=detection_queue,
             min_age_hours=min_age,
             max_age_hours=max_age,
+            min_age_hours_swing=min_age_swing,
+            max_age_hours_swing=max_age_swing,
+            min_liquidity_usd=min_liq_usd,
+            swing_incubator_min_liquidity_usd=swing_inc_liq,
+            min_liquidity_swing_usd=min_liq_swing,
+            max_liquidity_usd=_extract_decimal_setting(settings, "MAX_LIQUIDITY_USD", Decimal("250000.0")),
             poll_interval_seconds=float(getattr(settings, "MATURE_POOLS_POLL_INTERVAL_SEC", 5.0)),
             dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
             geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
@@ -188,29 +229,44 @@ def create_scanner(
         explicit_min_age = getattr(settings, "MIN_TOKEN_AGE_HOURS", None)
         explicit_max_age = getattr(settings, "MAX_TOKEN_AGE_HOURS", None)
         if strategy_mode == "SWING_ONLY":
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 48.0))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 4.0))
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)
         elif strategy_mode == "SCALP_ONLY":
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 4.0))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0)
         else:
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else float(getattr(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SWING", 48.0))
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else float(getattr(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
+            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)
+            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0)
+
+        min_age_swing = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)
+        min_age_swing = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)
+        max_age_swing = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)
+        min_liq_usd = _extract_decimal_setting(settings, "MIN_LIQUIDITY_USD", Decimal("5000.0"))
+        swing_inc_liq = _extract_decimal_setting(settings, "SWING_INCUBATOR_MIN_LIQUIDITY_USD", Decimal("15000.0"))
+        min_liq_swing = _extract_decimal_setting(settings, "MIN_LIQUIDITY_SWING_USD", Decimal("20000.0"))
 
         enable_established = bool(getattr(settings, "ENABLE_ESTABLISHED_POOLS", True))
 
         logger.info(
-            "Instanciando provedor de scanner de TOKENS MATUROS/CONSOLIDADOS (Janela de %.2fh a %.1fh).",
+            "Instanciando provedor de scanner de TOKENS MATUROS/CONSOLIDADOS (Janela de %.2fh a %.1fh | Swing: %.1fh a %.1fh).",
             min_age,
             max_age,
+            min_age_swing,
+            max_age_swing,
         )
         return MatureTokenScanner(
             detection_queue=detection_queue,
             min_age_hours=min_age,
             max_age_hours=max_age,
+            min_age_hours_swing=min_age_swing,
+            max_age_hours_swing=max_age_swing,
+            min_liquidity_usd=min_liq_usd,
+            swing_incubator_min_liquidity_usd=swing_inc_liq,
+            min_liquidity_swing_usd=min_liq_swing,
+            max_liquidity_usd=_extract_decimal_setting(settings, "MAX_LIQUIDITY_USD", Decimal("250000.0")),
             poll_interval_seconds=float(getattr(settings, "MATURE_POOLS_POLL_INTERVAL_SEC", 5.0)),
             dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
             geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),

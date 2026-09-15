@@ -42,6 +42,7 @@ export interface BotSettings {
   min_liquidity_swing_usd: number;
   min_token_age_scalp_min?: number;
   min_token_age_swing_hours?: number;
+  max_token_age_swing_hours?: number;
 }
 
 export interface BotStatusData {

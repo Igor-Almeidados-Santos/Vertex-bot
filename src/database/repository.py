@@ -179,22 +179,30 @@ class TokensRepository:
         exclude_addresses: list[str] | None = None,
         limit: int = 50,
     ) -> list[TokenMetadata]:
-        """Retorna tokens com status APPROVED elegíveis para entrada ou reentrada na watchlist ativa."""
-        conditions: list[str] = ["security_status = 'APPROVED'"]
+        """Retorna tokens com status APPROVED elegíveis para entrada ou reentrada na watchlist ativa, priorizando os já negociados."""
+        conditions: list[str] = ["t.security_status = 'APPROVED'"]
         params: list[Any] = []
 
         if exclude_addresses:
             placeholders = ",".join("?" for _ in exclude_addresses)
-            conditions.append(f"address NOT IN ({placeholders})")
+            conditions.append(f"t.address NOT IN ({placeholders})")
             params.extend(exclude_addresses)
 
         where_clause = f"WHERE {' AND '.join(conditions)}"
         query = f"""
-        SELECT address, symbol, name, chain, dex, pool_address,
-               initial_liquidity_usd, detection_timestamp
-        FROM tokens_catalogados
+        SELECT t.address, t.symbol, t.name, t.chain, t.dex, t.pool_address,
+               t.initial_liquidity_usd, t.detection_timestamp,
+               MAX(p.closed_at) as last_closed_at,
+               COUNT(p.id) as trade_count
+        FROM tokens_catalogados t
+        LEFT JOIN posicoes p ON t.address = p.token_address
         {where_clause}
-        ORDER BY security_score DESC, detection_timestamp DESC
+        GROUP BY t.address
+        ORDER BY
+            CASE WHEN MAX(p.closed_at) IS NOT NULL THEN 1 ELSE 2 END,
+            MAX(p.closed_at) DESC,
+            t.security_score DESC,
+            t.detection_timestamp DESC
         LIMIT ?
         """
         params.append(limit)
@@ -202,6 +210,12 @@ class TokensRepository:
         candidates: list[TokenMetadata] = []
         for r in rows:
             row = dict(r)
+            raw_event: dict[str, Any] = {}
+            if row.get("last_closed_at"):
+                raw_event["last_closed_at"] = row["last_closed_at"]
+            if row.get("trade_count"):
+                raw_event["trade_count"] = row["trade_count"]
+
             candidates.append(
                 TokenMetadata(
                     address=row["address"],
@@ -212,6 +226,7 @@ class TokensRepository:
                     symbol=row.get("symbol"),
                     name=row.get("name"),
                     detection_timestamp=datetime.now(UTC),
+                    raw_event=raw_event,
                 )
             )
         return candidates
@@ -465,7 +480,9 @@ class PositionsRepository:
                p.highest_price_seen, p.break_even_triggered, p.trailing_stop_price,
                p.ratchet_tier, p.ratchet_floor_price,
                p.opened_at, p.closed_at,
-               t.symbol, t.name
+               t.symbol, t.name,
+               (SELECT o.price FROM ordens_executadas o WHERE o.position_id = p.id AND o.order_type != 'BUY' ORDER BY o.id DESC LIMIT 1) as exit_price,
+               (SELECT o.order_type FROM ordens_executadas o WHERE o.position_id = p.id AND o.order_type != 'BUY' ORDER BY o.id DESC LIMIT 1) as close_reason
         FROM posicoes p
         LEFT JOIN tokens_catalogados t ON p.token_address = t.address
         {where_clause}

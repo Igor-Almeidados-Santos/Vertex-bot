@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { X, Save, Shield, Settings2, Sliders, Zap, TrendingUp, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
 import { BotSettings } from "@/types/bot";
 import { updateConfig } from "@/lib/api";
@@ -19,9 +19,18 @@ export function ConfigModal({ isOpen, onClose, currentSettings, onSaved }: Confi
 
   // Form State
   const [formData, setFormData] = useState<Record<string, any>>({});
+  const hasInitializedRef = useRef(false);
 
   useEffect(() => {
-    if (currentSettings) {
+    if (!isOpen) {
+      hasInitializedRef.current = false;
+      return;
+    }
+
+    // Inicializa o formulário APENAS UMA VEZ por abertura do modal,
+    // evitando que o polling periódico de status sobrescreva o que o usuário está digitando
+    if (isOpen && currentSettings && !hasInitializedRef.current) {
+      hasInitializedRef.current = true;
       setFormData({
         trading_strategy_mode: currentSettings.trading_strategy_mode || "DUAL",
         paper_buy_amount_usd: currentSettings.paper_buy_amount_usd ?? 1.0,
@@ -36,9 +45,12 @@ export function ConfigModal({ isOpen, onClose, currentSettings, onSaved }: Confi
         trailing_stop_drop_pct: currentSettings.trailing_stop_drop_pct ?? 12.0,
         emergency_stop_loss_pct: currentSettings.emergency_stop_loss_pct ?? 20.0,
         break_even_gain_pct: currentSettings.break_even_gain_pct ?? 100.0,
+        min_token_age_scalp_min: currentSettings.min_token_age_scalp_min ?? 120.0,
 
         // Swing
         swing_max_hold_hours: currentSettings.swing_max_hold_hours ?? 24.0,
+        min_token_age_swing_hours: currentSettings.min_token_age_swing_hours ?? 3.0,
+        max_token_age_swing_hours: currentSettings.max_token_age_swing_hours ?? 6.0,
         swing_target_gain_pct: currentSettings.swing_target_gain_pct ?? 2000.0,
         swing_max_hourly_drop_pct: currentSettings.swing_max_hourly_drop_pct ?? 15.0,
         swing_initial_stop_loss_pct: currentSettings.swing_initial_stop_loss_pct ?? 0.0,
@@ -305,6 +317,7 @@ export function ConfigModal({ isOpen, onClose, currentSettings, onSaved }: Confi
                 <div className="flex gap-1.5 text-[11px] font-mono">
                   <span className="px-2 py-0.5 rounded bg-scalp/15 text-scalp border border-scalp/30">
                     Entrada: 30m a 720h (Fixo)
+                    Entrada: 2h+ (120m) a 720h
                   </span>
                   <span className="px-2 py-0.5 rounded bg-scalp/15 text-scalp border border-scalp/30">
                     Tempo Máx: 1h (Fixo)
@@ -313,6 +326,21 @@ export function ConfigModal({ isOpen, onClose, currentSettings, onSaved }: Confi
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-300 font-medium mb-1">
+                    Idade Mínima de Entrada (minutos)
+                  </label>
+                  <input
+                    type="number"
+                    step="10"
+                    min="60"
+                    value={formData.min_token_age_scalp_min}
+                    onChange={(e) => handleChange("min_token_age_scalp_min", parseFloat(e.target.value))}
+                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-400 font-mono"
+                  />
+                  <span className="text-[10px] text-gray-500">Padrão: 120 min (2.0h) para evitar cascata inicial.</span>
+                </div>
+
                 <div>
                   <label className="block text-xs text-gray-300 font-medium mb-1">
                     Alvo de Lucro / Take Profit (%)
@@ -384,10 +412,43 @@ export function ConfigModal({ isOpen, onClose, currentSettings, onSaved }: Confi
                 </h3>
                 <span className="px-2 py-0.5 rounded bg-swing/15 text-swing border border-swing/30 text-[11px] font-mono">
                   Entrada: 2h a 4h de vida (Fixo)
+                  Entrada: 3h a 6h de vida
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-300 font-medium mb-1">
+                    Idade Mínima de Entrada (Horas)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="1"
+                    max="24"
+                    value={formData.min_token_age_swing_hours}
+                    onChange={(e) => handleChange("min_token_age_swing_hours", parseFloat(e.target.value))}
+                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-400 font-mono"
+                  />
+                  <span className="text-[10px] text-gray-500">Padrão: 3.0h para consolidação.</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-300 font-medium mb-1">
+                    Idade Máxima de Entrada (Horas)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="2"
+                    max="72"
+                    value={formData.max_token_age_swing_hours}
+                    onChange={(e) => handleChange("max_token_age_swing_hours", parseFloat(e.target.value))}
+                    className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-400 font-mono"
+                  />
+                  <span className="text-[10px] text-gray-500">Padrão: 6.0h de teto.</span>
+                </div>
+
                 <div>
                   <label className="block text-xs text-gray-300 font-medium mb-1">
                     Tempo Máximo de Posição (Horas)

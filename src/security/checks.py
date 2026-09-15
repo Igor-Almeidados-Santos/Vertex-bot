@@ -10,6 +10,7 @@ from typing import Any
 from solders.pubkey import Pubkey
 
 from src.scanner.client import ResilientRPCClient
+from src.utils.exceptions import RPCConnectionError
 from src.utils.logger import setup_logger
 
 logger = setup_logger("vertex.security.checks")
@@ -48,6 +49,8 @@ class SecurityChecks:
             mint_auth = info.get("mintAuthority")
             # Mint authority deve ser explicitamente None / null
             return mint_auth is None
+        except RPCConnectionError:
+            raise
         except Exception as exc:
             logger.warning("Falha ao checar mint authority de %s: %s", token_address, exc)
             return False
@@ -81,6 +84,8 @@ class SecurityChecks:
             info = parsed.get("info", {})
             freeze_auth = info.get("freezeAuthority")
             return freeze_auth is None
+        except RPCConnectionError:
+            raise
         except Exception as exc:
             logger.warning("Falha ao checar freeze authority de %s: %s", token_address, exc)
             return False
@@ -194,6 +199,8 @@ class SecurityChecks:
             burn_pct = round((burned_amount / total_supply) * 100.0, 2)
             return (burn_pct >= 98.0, burn_pct)
 
+        except RPCConnectionError:
+            raise
         except Exception as exc:
             logger.warning("Falha ao checar LP de pool %s: %s", pool_address, exc)
             return (True, 100.0) if is_pump else (False, 0.0)
@@ -338,6 +345,8 @@ class SecurityChecks:
             )
             return top10_pct
 
+        except RPCConnectionError:
+            raise
         except Exception as exc:
             logger.warning("Falha ao consultar maiores contas de %s: %s", token_address, exc)
             return 100.0

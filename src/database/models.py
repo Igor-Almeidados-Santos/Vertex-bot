@@ -144,6 +144,7 @@ class PositionState(BaseModel):
     remaining_token_amount: Decimal = Decimal("0.0")
     realized_pnl_usd: Decimal = Decimal("0.0")
     highest_price_seen: Decimal = Decimal("0.0")
+    current_price: Decimal | None = None
     break_even_triggered: bool = False
     trailing_stop_price: Decimal = Decimal("0.0")
     last_hourly_eval_hour: int = 0
@@ -168,6 +169,9 @@ class PositionState(BaseModel):
         if data.get("highest_price_seen") is None and entry is not None:
             data["highest_price_seen"] = entry
 
+        if data.get("current_price") is None and entry is not None:
+            data["current_price"] = entry
+
         strat = data.get("strategy_type", "SCALP")
         data.setdefault("strategy_type", strat)
 
@@ -191,6 +195,22 @@ class PositionState(BaseModel):
 
         if data.get("opened_at") is None:
             data["opened_at"] = datetime.now(UTC)
+
+    @property
+    def unrealized_pnl_usd(self) -> Decimal:
+        """Calcula o lucro/prejuízo flutuante em USD com precisão Decimal."""
+        curr = self.current_price or self.highest_price_seen or self.entry_price
+        if curr is None or self.entry_price <= Decimal("0.0"):
+            return Decimal("0.0")
+        return (curr - self.entry_price) * self.remaining_token_amount
+
+    @property
+    def roi_pct(self) -> Decimal:
+        """Calcula o retorno percentual flutuante (ROI %) atual."""
+        curr = self.current_price or self.highest_price_seen or self.entry_price
+        if curr is None or self.entry_price <= Decimal("0.0"):
+            return Decimal("0.0")
+        return ((curr - self.entry_price) / self.entry_price) * Decimal("100.0")
 
     def elapsed_seconds(self, now_utc: datetime | None = None) -> float:
         """Retorna o tempo decorrido em segundos desde a abertura da posição."""

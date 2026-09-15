@@ -227,8 +227,17 @@ async def test_dual_track_entry_orchestration(tmp_path: Path) -> None:
     token = TokenMetadata(
         address="DualTrackBuyToken11111111111111111111111",
         dex="raydium",
-        initial_liquidity_usd=Decimal("15000.0"),
+        initial_liquidity_usd=Decimal("25000.0"),
         symbol="DUAL",
+        raw_event={
+            "age_hours": 3.0,
+            "pair_data": {
+                "volume": {"h1": 30000.0},
+                "priceChange": {"m5": 2.0},
+                "txns": {"m5": {"buys": 50, "sells": 10}},
+                "liquidity": {"usd": 25000.0},
+            },
+        },
     )
 
     pos_scalp = PositionState(
@@ -237,7 +246,7 @@ async def test_dual_track_entry_orchestration(tmp_path: Path) -> None:
         mode=ExecutionMode.PAPER,
         strategy_type="SCALP",
         entry_price=Decimal("1.0"),
-        initial_token_amount=Decimal("2.0"),
+        initial_token_amount=Decimal("4.0"),
         allocated_capital_usd=Decimal("4.00"),
     )
     pos_swing = PositionState(
@@ -266,3 +275,173 @@ async def test_dual_track_entry_orchestration(tmp_path: Path) -> None:
     assert len(orch.position_tracker.active_positions) == 2
     active_strategies = {p.strategy_type for p in orch.position_tracker.active_positions.values()}
     assert active_strategies == {"SCALP", "SWING"}
+
+
+@pytest.mark.asyncio
+async def test_dual_mode_scalp_only_for_young_token(tmp_path: Path) -> None:
+    """Verifica que um token com 50 minutos (cenário PONK) em modo DUAL abre APENAS Scalp e JAMAIS Swing."""
+    settings = Settings(
+        SQLITE_DB_PATH=str(tmp_path / "test_ponk.db"),
+        EXECUTION_MODE="PAPER",
+        TRADING_STRATEGY_MODE="DUAL",
+        PAPER_INITIAL_WALLET_USD=Decimal("50.0"),
+        PAPER_BUY_AMOUNT_USD=Decimal("2.00"),
+        MAX_CONCURRENT_POSITIONS=10,
+    )
+    orch = VertexBotOrchestrator(settings)
+    orch.execution_engine.balance_usd = Decimal("50.00")
+
+    token_ponk = TokenMetadata(
+        address="PonkToken11111111111111111111111111111111111",
+        dex="raydium",
+        initial_liquidity_usd=Decimal("34000.0"),
+        symbol="PONK",
+        raw_event={
+            "age_hours": 0.85,  # 51 minutos de vida (< 2h)
+            "pair_data": {
+                "volume": {"h1": 50000.0},
+                "priceChange": {"m5": 1.0},
+                "txns": {"m5": {"buys": 30, "sells": 5}},
+                "liquidity": {"usd": 34000.0},
+            },
+        },
+    )
+
+    pos_scalp = PositionState(
+        id=1,
+        token_address=token_ponk.address,
+        mode=ExecutionMode.PAPER,
+        strategy_type="SCALP",
+        entry_price=Decimal("1.0"),
+        initial_token_amount=Decimal("2.0"),
+        allocated_capital_usd=Decimal("2.00"),
+    )
+
+    orch.execution_engine.execute_buy = AsyncMock(return_value=pos_scalp)  # type: ignore[method-assign]
+
+    await orch._evaluate_and_execute_entry(token_ponk)
+
+    # Deve ter chamado execute_buy EXATAMENTE UMA VEZ para SCALP!
+    assert orch.execution_engine.execute_buy.await_count == 1
+    call = orch.execution_engine.execute_buy.await_args
+    assert call.kwargs["strategy_type"] == "SCALP"
+    assert call.kwargs["amount_usd"] == Decimal("2.00")
+
+    # Apenas a posição de Scalp foi registrada
+    assert len(orch.position_tracker.active_positions) == 1
+    pos = list(orch.position_tracker.active_positions.values())[0]
+    assert pos.strategy_type == "SCALP"
+
+
+@pytest.mark.asyncio
+async def test_dual_mode_scalp_only_for_old_token(tmp_path: Path) -> None:
+    """Verifica que um token com 15 horas (> 4h) em modo DUAL abre APENAS Scalp e JAMAIS Swing."""
+    settings = Settings(
+        SQLITE_DB_PATH=str(tmp_path / "test_old.db"),
+        EXECUTION_MODE="PAPER",
+        TRADING_STRATEGY_MODE="DUAL",
+        PAPER_INITIAL_WALLET_USD=Decimal("50.0"),
+        PAPER_BUY_AMOUNT_USD=Decimal("2.00"),
+        MAX_CONCURRENT_POSITIONS=10,
+    )
+    orch = VertexBotOrchestrator(settings)
+    orch.execution_engine.balance_usd = Decimal("50.00")
+
+    token_old = TokenMetadata(
+        address="OldToken111111111111111111111111111111111111",
+        dex="raydium",
+        initial_liquidity_usd=Decimal("50000.0"),
+        symbol="OLD",
+        raw_event={
+            "age_hours": 15.0,  # 15 horas (> 4h)
+            "pair_data": {
+                "volume": {"h1": 60000.0},
+                "priceChange": {"m5": 0.5},
+                "txns": {"m5": {"buys": 40, "sells": 10}},
+                "liquidity": {"usd": 50000.0},
+            },
+        },
+    )
+
+    pos_scalp = PositionState(
+        id=1,
+        token_address=token_old.address,
+        mode=ExecutionMode.PAPER,
+        strategy_type="SCALP",
+        entry_price=Decimal("1.0"),
+        initial_token_amount=Decimal("2.0"),
+        allocated_capital_usd=Decimal("2.00"),
+    )
+
+    orch.execution_engine.execute_buy = AsyncMock(return_value=pos_scalp)  # type: ignore[method-assign]
+
+    await orch._evaluate_and_execute_entry(token_old)
+
+    assert orch.execution_engine.execute_buy.await_count == 1
+    call = orch.execution_engine.execute_buy.await_args
+    assert call.kwargs["strategy_type"] == "SCALP"
+
+
+@pytest.mark.asyncio
+async def test_dual_mode_swing_entry_when_scalp_slots_full(tmp_path: Path) -> None:
+    """Verifica que quando as vagas de Scalp estão cheias (ex: 5/5), um token de Swing ainda consegue abrir vaga de Swing."""
+    settings = Settings(
+        SQLITE_DB_PATH=str(tmp_path / "test_slots.db"),
+        EXECUTION_MODE="PAPER",
+        TRADING_STRATEGY_MODE="DUAL",
+        PAPER_INITIAL_WALLET_USD=Decimal("50.0"),
+        PAPER_BUY_AMOUNT_USD=Decimal("1.00"),
+        MAX_CONCURRENT_POSITIONS=10,  # 5 Scalp, 5 Swing
+    )
+    orch = VertexBotOrchestrator(settings)
+    orch.execution_engine.balance_usd = Decimal("50.00")
+
+    # Pré-ocupa todos os 5 slots de SCALP
+    for i in range(5):
+        p = PositionState(
+            id=i + 1,
+            token_address=f"ScalpFullToken{i}",
+            mode=ExecutionMode.PAPER,
+            strategy_type="SCALP",
+            entry_price=Decimal("1.0"),
+            initial_token_amount=Decimal("1.0"),
+            allocated_capital_usd=Decimal("1.00"),
+        )
+        orch.position_tracker.active_positions[p.id] = p
+
+    # Chega um novo token maduro para Swing (3.0h de idade e $25k de liquidez)
+    token_swing = TokenMetadata(
+        address="SwingIdealToken1111111111111111111111111111",
+        dex="raydium",
+        initial_liquidity_usd=Decimal("25000.0"),
+        symbol="SWNG",
+        raw_event={
+            "age_hours": 3.0,
+            "pair_data": {
+                "volume": {"h1": 30000.0},
+                "priceChange": {"m5": 1.5},
+                "txns": {"m5": {"buys": 50, "sells": 10}},
+                "liquidity": {"usd": 25000.0},
+            },
+        },
+    )
+
+    pos_swing = PositionState(
+        id=6,
+        token_address=token_swing.address,
+        mode=ExecutionMode.PAPER,
+        strategy_type="SWING",
+        entry_price=Decimal("1.0"),
+        initial_token_amount=Decimal("1.0"),
+        allocated_capital_usd=Decimal("1.00"),
+    )
+    orch.execution_engine.execute_buy = AsyncMock(return_value=pos_swing)  # type: ignore[method-assign]
+
+    await orch._evaluate_and_execute_entry(token_swing)
+
+    # Como as vagas de Scalp estão cheias (5/5), mas há vagas de Swing livres (0/5), abre exclusivamente SWING!
+    assert orch.execution_engine.execute_buy.await_count == 1
+    call = orch.execution_engine.execute_buy.await_args
+    assert call.kwargs["strategy_type"] == "SWING"
+    assert call.kwargs["amount_usd"] == Decimal("1.00")
+

@@ -19,7 +19,7 @@ from src.security.validator import SecurityValidator
 
 def create_token_with_market_data(
     address: str = "TEST_TOKEN_XYZ",
-    age_hours: float = 1.0,
+    age_hours: float = 2.5,
     volume_1h: float = 25000.0,
     price_change_5m: float = 3.5,
     buys_5m: int = 40,
@@ -82,9 +82,9 @@ def test_market_dynamics_dominant_selling_rejected():
 
 
 def test_market_dynamics_ultra_young_token_rejected():
-    """Token com 12 minutos de existência (< 30 min) deve ser reprovado por risco de sniper dump."""
-    validator = MarketDynamicsValidator(min_age_hours_scalp=0.5)
-    token = create_token_with_market_data(age_hours=0.2)  # 12 min
+    """Token com 45 minutos de existência (< 2h) deve ser reprovado por risco de sniper dump / cascata inicial."""
+    validator = MarketDynamicsValidator(min_age_hours_scalp=2.0)
+    token = create_token_with_market_data(age_hours=0.75)  # 45 min
 
     is_safe, reason, details = validator.evaluate(token, strategy_mode="SCALP_ONLY")
     assert is_safe is False
@@ -93,15 +93,15 @@ def test_market_dynamics_ultra_young_token_rejected():
 
 
 def test_market_dynamics_scalp_eligibility():
-    """Token com 45m de existência, volume forte e compras em alta deve ser aprovado para SCALP."""
+    """Token com 2.2h de existência, volume forte e compras em alta deve ser aprovado para SCALP."""
     validator = MarketDynamicsValidator(
-        min_age_hours_scalp=0.5,
-        max_age_hours_scalp=4.0,
-        min_age_hours_swing=2.0,
+        min_age_hours_scalp=2.0,
+        max_age_hours_scalp=720.0,
+        min_age_hours_swing=3.0,
         min_liquidity_swing_usd=Decimal("20000.0"),
     )
     token = create_token_with_market_data(
-        age_hours=0.75,  # 45 min
+        age_hours=2.2,  # 2h12min
         volume_1h=30000.0,
         price_change_5m=4.0,
         buys_5m=50,
@@ -113,20 +113,20 @@ def test_market_dynamics_scalp_eligibility():
     assert is_safe is True
     assert reason is None
     assert details["eligible_scalp"] is True
-    assert details["eligible_swing"] is False  # Não tem 2h ainda nem $20k liq
+    assert details["eligible_swing"] is False  # Não tem 3h ainda nem $20k liq
 
 
 def test_market_dynamics_swing_and_scalp_eligibility():
-    """Token com 3h de existência e liquidez de $35k deve ser aprovado para AMBOS (Dual-Track)."""
+    """Token com 3.5h de existência e liquidez de $35k deve ser aprovado para AMBOS (Dual-Track)."""
     validator = MarketDynamicsValidator(
-        min_age_hours_scalp=0.5,
-        max_age_hours_scalp=4.0,
-        min_age_hours_swing=2.0,
-        max_age_hours_swing=48.0,
+        min_age_hours_scalp=2.0,
+        max_age_hours_scalp=720.0,
+        min_age_hours_swing=3.0,
+        max_age_hours_swing=6.0,
         min_liquidity_swing_usd=Decimal("20000.0"),
     )
     token = create_token_with_market_data(
-        age_hours=3.0,
+        age_hours=3.5,
         volume_1h=50000.0,
         price_change_5m=2.0,
         buys_5m=80,

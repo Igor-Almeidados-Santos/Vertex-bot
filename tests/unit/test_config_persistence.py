@@ -152,10 +152,10 @@ async def test_evaluate_and_execute_entry_respects_paper_buy_amount(
         await orch._evaluate_and_execute_entry(token)
 
         # execute_buy deve ter sido chamado com exatamente 3.50
-        orch.execution_engine.execute_buy.assert_awaited_once_with(
-            token,
-            amount_usd=Decimal("3.50"),
-        )
+        assert orch.execution_engine.execute_buy.await_count == 1
+        call_args = orch.execution_engine.execute_buy.await_args
+        assert call_args.args[0] == token
+        assert call_args.kwargs["amount_usd"] == Decimal("3.50")
 
 
 @pytest.mark.asyncio

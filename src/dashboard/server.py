@@ -253,6 +253,8 @@ class DashboardServer:
                     "swing_trailing_drop_pct": _safe_float(getattr(settings_obj, "SWING_TRAILING_DROP_PCT", 25.0), 25.0),
                     "min_token_age_scalp_min": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5), 0.5) * 60.0,
                     "min_token_age_swing_hours": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SWING", 2.0), 2.0),
+                    "min_token_age_scalp_min": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0), 2.0) * 60.0,
+                    "min_token_age_swing_hours": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SWING", 3.0), 3.0),
                     "min_volume_1h_usd": _safe_float(getattr(settings_obj, "MIN_VOLUME_1H_USD", 15000.0), 15000.0),
                     "min_buy_ratio_5m_pct": _safe_float(getattr(settings_obj, "MIN_BUY_RATIO_5M_PCT", 50.0), 50.0),
                     "min_price_change_5m_pct": _safe_float(getattr(settings_obj, "MIN_PRICE_CHANGE_5M_PCT", -2.0), -2.0),
@@ -337,6 +339,23 @@ class DashboardServer:
             self._active_ws_clients.discard(ws)
         return ws
 
+    async def broadcast_event(self, event_type: str, data: Any) -> None:
+        """Transmite um evento JSON para todos os clientes conectados ao WebSocket."""
+        if not self._active_ws_clients:
+            return
+        payload = {
+            "type": event_type,
+            "data": data,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        coros = [
+            client.send_json(payload)
+            for client in list(self._active_ws_clients)
+            if not client.closed
+        ]
+        if coros:
+            await asyncio.gather(*coros, return_exceptions=True)
+
     def _get_decoupled_initial_wallet(self) -> float:
         """Obtém a banca inicial configurada quando em modo desacoplado."""
         if CONFIG_FILE.exists():
@@ -417,6 +436,54 @@ class DashboardServer:
                 limit=limit,
                 status_filter=status_filter,
             )
+
+            # Enriquecimento em tempo real com memória de execuções ativas e cotações
+            active_map: dict[int, Any] = {}
+            if self.orchestrator and hasattr(self.orchestrator, "position_tracker"):
+                active_map = getattr(self.orchestrator.position_tracker, "active_positions", {})
+
+            for p in positions:
+                pos_id = p.get("id")
+                active_pos = active_map.get(pos_id) if isinstance(pos_id, int) else None
+                entry_val = Decimal(str(p.get("entry_price") or 0.0))
+
+                if active_pos and p.get("status") in ("OPEN", "PARTIALLY_CLOSED"):
+                    curr_price = (
+                        getattr(active_pos, "current_price", None)
+                        or getattr(active_pos, "highest_price_seen", None)
+                        or active_pos.entry_price
+                    )
+                    p["current_price"] = float(curr_price)
+                    p["highest_price_seen"] = float(active_pos.highest_price_seen)
+                    p["trailing_stop_price"] = float(active_pos.trailing_stop_price)
+                    p["ratchet_tier"] = active_pos.ratchet_tier
+                    p["active_tier"] = active_pos.ratchet_tier
+                    p["ratchet_floor_price"] = float(active_pos.ratchet_floor_price)
+                    p["break_even_triggered"] = bool(active_pos.break_even_triggered)
+
+                    rem_tokens = getattr(active_pos, "remaining_token_amount", Decimal("0.0"))
+                    unrealized_usd = (curr_price - entry_val) * rem_tokens
+                    unrealized_pct = (
+                        ((curr_price - entry_val) / entry_val * Decimal("100.0"))
+                        if entry_val > Decimal("0.0")
+                        else Decimal("0.0")
+                    )
+
+                    p["unrealized_pnl_usd"] = round(float(unrealized_usd), 4)
+                    p["unrealized_pnl_pct"] = round(float(unrealized_pct), 2)
+                else:
+                    # Posição encerrada ou arquivada
+                    exit_p = p.get("exit_price")
+                    if exit_p is not None and float(exit_p) > 0.0:
+                        p["current_price"] = float(exit_p)
+                    else:
+                        p["current_price"] = float(p.get("highest_price_seen") or p.get("entry_price") or 0.0)
+
+                    allocated = Decimal(str(p.get("allocated_capital_usd") or 1.0))
+                    realized = Decimal(str(p.get("realized_pnl_usd") or 0.0))
+                    ret_pct = (realized / allocated * Decimal("100.0")) if allocated > Decimal("0.0") else Decimal("0.0")
+                    p["unrealized_pnl_usd"] = round(float(realized), 4)
+                    p["unrealized_pnl_pct"] = round(float(ret_pct), 2)
 
             return web.json_response(
                 {"status": "success", "data": positions},

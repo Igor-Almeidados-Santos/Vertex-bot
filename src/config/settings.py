@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # === PROVEDOR DE INGESTÃO (SCANNER) ===
     SCANNER_PROVIDER: Literal["MATURE_POOLS", "INDEXED", "RAW_RPC", "PUMPPORTAL", "HYBRID", "GRADUATIONS"] = "HYBRID"
-    MIN_TOKEN_AGE_HOURS: float = 0.5   # 30 minutos de existência
+    MIN_TOKEN_AGE_HOURS: float = 2.0   # Mínimo 2 horas (elimina zona de morte e cascatas de snipers/devs)
     MAX_TOKEN_AGE_HOURS: float = 720.0 # Até 720 horas (1 mês) para Scalp consolidado
     ENABLE_ESTABLISHED_POOLS: bool = True  # Ativa busca de pools consolidadas e trending
     MATURE_POOLS_POLL_INTERVAL_SEC: float = 5.0
@@ -94,14 +94,19 @@ class Settings(BaseSettings):
     MAX_SWING_POSITIONS: int = 3
 
     # === PARÂMETROS DE DINÂMICA DE MERCADO (ANTI-DUMP & SELEÇÃO) ===
-    MIN_TOKEN_AGE_HOURS_SCALP: float = 0.5   # 30 minutos (evita zona de morte de snipers)
+    MIN_TOKEN_AGE_HOURS_SCALP: float = 2.0   # Mínimo 2 horas para Scalp (supera a zona de cascata de snipers)
     MAX_TOKEN_AGE_HOURS_SCALP: float = 720.0 # Até 720 horas (1 mês) para Scalp consolidado
-    MIN_TOKEN_AGE_HOURS_SWING: float = 2.0   # Mínimo 2 horas de consolidação
-    MAX_TOKEN_AGE_HOURS_SWING: float = 4.0   # Máximo 4 horas na entrada de Swing
+    MIN_TOKEN_AGE_HOURS_SWING: float = 3.0   # Mínimo 3 horas de consolidação para Swing
+    MAX_TOKEN_AGE_HOURS_SWING: float = 6.0   # Máximo 6 horas na entrada de Swing
+    SWING_INCUBATOR_MIN_LIQUIDITY_USD: Decimal = Decimal("15000.0") # Piso de liquidez para manter token em incubação para Swing
     MIN_VOLUME_1H_USD: Decimal = Decimal("15000.0")  # Giro mínimo em 1h
     MIN_BUY_RATIO_5M_PCT: Decimal = Decimal("50.0")  # Ao menos 50% de compras em 5m
     MIN_PRICE_CHANGE_5M_PCT: Decimal = Decimal("-2.0")  # Não comprar em queda livre
     MIN_LIQUIDITY_SWING_USD: Decimal = Decimal("20000.0")  # Liquidez mais densa para swing
+    MAX_SELLER_TO_BUYER_RATIO: Decimal = Decimal("1.5")  # Rejeita se vendedores superarem compradores em mais de 50%
+    MIN_LIQUIDITY_TO_VOLUME_RATIO: Decimal = Decimal("0.05")  # Liquidez deve ser >= 5% do volume de 24h (anti-drenagem)
+    MIN_UNIQUE_TRADERS_24H: int = 15  # Mínimo de traders únicos para tokens com volume expressivo
+    MAX_PARABOLIC_1H_GAIN_PCT: Decimal = Decimal("250.0")  # Teto de rali parabólico em 1h para exaustão pós-pump
 
     # === LIVE TRADING ===
     WALLET_PRIVATE_KEY_BASE58: str | None = None
@@ -150,11 +155,15 @@ def get_settings(env_path: str = ".env") -> Settings:
     for k, v in env_vars.items():
         _apply_env_var(settings, k, v)
 
-    # Se HELIUS_API_KEY foi definida e os endpoints ainda apontam para o RPC público default,
-    # monta automaticamente as URLs de alta velocidade da Helius:
+    # Limpa URLs ou chaves com placeholder default (ex: YOUR-KEY)
+    placeholders = ("YOUR-KEY", "YOUR_KEY", "YOUR-API-KEY", "YOUR_API_KEY", "CHANGEME", "<KEY>", "<API_KEY>")
+    if settings.SECONDARY_RPC_HTTP_URL and any(ph in settings.SECONDARY_RPC_HTTP_URL for ph in placeholders):
+        settings.SECONDARY_RPC_HTTP_URL = None
+
+    # Se HELIUS_API_KEY foi definida e válida, monta automaticamente URLs da Helius
     if settings.HELIUS_API_KEY:
         key = str(settings.HELIUS_API_KEY).strip()
-        if key:
+        if key and not any(ph in key for ph in placeholders):
             if "api.mainnet-beta.solana.com" in settings.PRIMARY_RPC_HTTP_URL:
                 settings.PRIMARY_RPC_HTTP_URL = f"https://mainnet.helius-rpc.com/?api-key={key}"
             if "api.mainnet-beta.solana.com" in settings.PRIMARY_RPC_WS_URL:

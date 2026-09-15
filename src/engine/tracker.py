@@ -34,6 +34,8 @@ class PositionTracker:
     async def register_position(self, position: PositionState) -> None:
         """Adiciona uma nova posição ao rastreador de risco."""
         if position.id is not None:
+            if position.current_price is None:
+                position.current_price = position.entry_price
             self.active_positions[position.id] = position
             logger.info("Posição ID #%d (%s) registrada no Tracker de Risco.", position.id, position.token_address)
 
@@ -42,6 +44,8 @@ class PositionTracker:
         position = self.active_positions.get(position_id)
         if not position or position.status in (PositionStatus.CLOSED, PositionStatus.STOPPED):
             return
+
+        position.current_price = current_price
 
         decision = self.risk_manager.evaluate_price_tick(position, current_price)
         if not decision:

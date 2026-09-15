@@ -34,8 +34,14 @@ class MatureTokenScanner:
     def __init__(
         self,
         detection_queue: asyncio.Queue[TokenMetadata],
-        min_age_hours: float = 0.5,
+        min_age_hours: float = 2.0,
         max_age_hours: float = 8.0,
+        min_age_hours_swing: float = 3.0,
+        max_age_hours_swing: float = 6.0,
+        min_liquidity_usd: Decimal = Decimal("5000.0"),
+        swing_incubator_min_liquidity_usd: Decimal = Decimal("15000.0"),
+        min_liquidity_swing_usd: Decimal = Decimal("20000.0"),
+        max_liquidity_usd: Decimal = Decimal("250000.0"),
         poll_interval_seconds: float = 5.0,
         dexscreener_base_url: str = "https://api.dexscreener.com",
         geckoterminal_base_url: str = "https://api.geckoterminal.com",
@@ -45,13 +51,26 @@ class MatureTokenScanner:
         self.detection_queue: asyncio.Queue[TokenMetadata] = detection_queue
         self.min_age_hours: float = min_age_hours
         self.max_age_hours: float = max_age_hours
+        self.min_age_hours_swing: float = min_age_hours_swing
+        self.max_age_hours_swing: float = max_age_hours_swing
+        self.min_liquidity_usd: Decimal = min_liquidity_usd
+        self.swing_incubator_min_liquidity_usd: Decimal = swing_incubator_min_liquidity_usd
+        self.min_liquidity_swing_usd: Decimal = min_liquidity_swing_usd
+        self.max_liquidity_usd: Decimal = max_liquidity_usd
         self.poll_interval: float = poll_interval_seconds
         self.dexscreener_base_url: str = dexscreener_base_url.rstrip("/")
         self.geckoterminal_base_url: str = geckoterminal_base_url.rstrip("/")
         self.max_seen_cache: int = max_seen_cache
         self.enable_established_pools: bool = enable_established_pools
+
         self._seen_addresses: set[str] = set()
+        self._seen_scalp: set[str] = set()
+        self._seen_swing: set[str] = set()
+        self._permanently_rejected: set[str] = set()
+        self._last_age_check: dict[str, tuple[float, float]] = {}
+
         self._maturing_tokens: dict[str, dict[str, Any]] = {}
+        self._maturing_swing_tokens: dict[str, dict[str, Any]] = {}
         self._gecko_pages_cycle: list[int] = [1, 2, 3, 5, 7, 10]
         self._gecko_cycle_idx: int = 0
         self._established_pages_cycle: list[int] = [1, 2, 3]
@@ -74,9 +93,11 @@ class MatureTokenScanner:
         self.is_running = True
         self._task = asyncio.create_task(self._poll_loop())
         logger.info(
-            "Scanner de Tokens Maduros iniciado. Janela alvo: [%.1fh a %.1fh] de existência.",
+            "Scanner de Tokens Maduros iniciado. Janela Scalp: [%.1fh a %.1fh] | Swing: [%.1fh a %.1fh].",
             self.min_age_hours,
             self.max_age_hours,
+            self.min_age_hours_swing,
+            self.max_age_hours_swing,
         )
 
     async def stop(self) -> None:
@@ -93,19 +114,71 @@ class MatureTokenScanner:
             self._session = None
         logger.info("Scanner de Tokens Maduros finalizado.")
 
-    def _remember_seen_address(self, token_addr: str) -> None:
-        """Registra o endereço no cache de vistos, respeitando o limite máximo."""
+    def _remember_seen_address(self, token_addr: str, stage: str | None = None) -> None:
+        """Registra o endereço no cache de vistos de acordo com o estágio avaliado."""
         self._seen_addresses.add(token_addr)
+        if stage == "SCALP":
+            self._seen_scalp.add(token_addr)
+        elif stage == "SWING":
+            self._seen_swing.add(token_addr)
+            self._seen_scalp.add(token_addr)
+        elif stage == "PERMANENT":
+            self._permanently_rejected.add(token_addr)
+            self._seen_scalp.add(token_addr)
+            self._seen_swing.add(token_addr)
+
         if len(self._seen_addresses) > self.max_seen_cache:
-            self._seen_addresses.pop()
+            discarded = self._seen_addresses.pop()
+            self._seen_scalp.discard(discarded)
+            self._seen_swing.discard(discarded)
+            self._permanently_rejected.discard(discarded)
+            self._last_age_check.pop(discarded, None)
 
     def release_token(self, token_addr: str) -> None:
-        """Remove o token do cache de vistos para permitir nova reanálise e reentrada futura."""
+        """Remove o token do cache de vistos e incubadoras para permitir nova reanálise e reentrada futura."""
         self._seen_addresses.discard(token_addr)
+        self._seen_scalp.discard(token_addr)
+        self._seen_swing.discard(token_addr)
+        self._permanently_rejected.discard(token_addr)
+        self._maturing_tokens.pop(token_addr, None)
+        self._maturing_swing_tokens.pop(token_addr, None)
+        self._last_age_check.pop(token_addr, None)
         logger.info(
             "🔄 [TOKEN LIBERADO PARA REANÁLISE] Endereço %s removido do cache de vistos do MatureTokenScanner.",
             token_addr,
         )
+
+    def _is_candidate_needed(self, token_addr: str, now_sec: float | None = None) -> bool:
+        """
+        Determina se um candidato deve ser consultado e processado:
+        - Rejeitado permanentemente: NÃO.
+        - Já avaliado para Swing: NÃO.
+        - Em incubação ativa: NÃO (será processado pelo próprio loop de incubação).
+        - Nunca visto: SIM.
+        - Visto para Scalp, mas pendente para Swing: SIM se já tiver decorrido tempo para atingir 2h.
+        """
+        if token_addr in self._permanently_rejected:
+            return False
+        if token_addr in self._seen_swing:
+            return False
+        if token_addr in self._maturing_tokens or token_addr in self._maturing_swing_tokens:
+            return False
+        if token_addr not in self._seen_addresses:
+            return True
+
+        # Foi visto anteriormente para Scalp e ainda não para Swing:
+        if token_addr in self._seen_scalp and token_addr not in self._seen_swing:
+            if now_sec is None:
+                now_sec = datetime.now(UTC).timestamp()
+            last_check = self._last_age_check.get(token_addr)
+            if last_check:
+                last_age, last_ts = last_check
+                elapsed_hours = max(0.0, (now_sec - last_ts) / 3600.0)
+                if (last_age + elapsed_hours) < self.min_age_hours_swing:
+                    return False
+            return True
+
+        return token_addr not in self._seen_addresses
 
     async def _process_single_candidate(
         self,
@@ -113,34 +186,60 @@ class MatureTokenScanner:
         hint: dict[str, Any],
     ) -> None:
         """Avalia um candidato e encaminha para a fila se aprovado."""
-        if token_addr in self._seen_addresses:
+        if not self._is_candidate_needed(token_addr):
             return
 
         token, is_permanent = await self._evaluate_and_enrich_token(token_addr, hint)
         if token:
-            self._remember_seen_address(token_addr)
+            age = float(token.raw_event.get("age_hours") or 0.0) if isinstance(token.raw_event, dict) else 0.0
+            if age >= self.min_age_hours_swing:
+                self._remember_seen_address(token_addr, stage="SWING")
+            else:
+                self._remember_seen_address(token_addr, stage="SCALP")
+                if token.initial_liquidity_usd >= self.swing_incubator_min_liquidity_usd:
+                    created_ms = 0
+                    if isinstance(token.raw_event, dict) and isinstance(token.raw_event.get("pair_data"), dict):
+                        pair_dict = token.raw_event["pair_data"]
+                        if isinstance(pair_dict, dict):
+                            created_ms = int(pair_dict.get("pairCreatedAt") or 0)
+                    if not created_ms:
+                        now_ms = int(datetime.now(UTC).timestamp() * 1000)
+                        created_ms = int(now_ms - age * 3600.0 * 1000.0)
+                    self._maturing_swing_tokens[token_addr] = {
+                        "created_at_ms": created_ms,
+                        "hint": hint,
+                        "pair_data": token.raw_event.get("pair_data") if isinstance(token.raw_event, dict) else None,
+                    }
+                    logger.info(
+                        "🔭 [INCUBADORA SWING] Token %s (Liq $%.0f, Idade %.1fh) monitorado para promoção aos %.1fh.",
+                        token.symbol or token_addr[:8],
+                        token.initial_liquidity_usd,
+                        age,
+                        self.min_age_hours_swing,
+                    )
             await self.detection_queue.put(token)
         elif is_permanent:
-            self._remember_seen_address(token_addr)
+            self._remember_seen_address(token_addr, stage="PERMANENT")
 
     async def _check_maturing_tokens(self) -> None:
-        """Verifica a fila de maturação e libera tokens que completaram o tempo mínimo (15m)."""
-        if not self._maturing_tokens:
+        """Verifica as filas de maturação (Scalp e Swing) e libera tokens quando completam a idade mínima."""
+        if not self._maturing_tokens and not self._maturing_swing_tokens:
             return
 
         now_utc = datetime.now(UTC)
         now_ms = int(now_utc.timestamp() * 1000)
-        ready_to_release: list[str] = []
 
+        # 1. Maturação Scalp (< min_age_hours -> min_age_hours, ex: 15m a 30m)
+        ready_scalp: list[str] = []
         for token_addr, data in list(self._maturing_tokens.items()):
             created_ms = data.get("created_at_ms", 0)
             age_hours = (now_ms - created_ms) / (1000.0 * 3600.0)
             if self.min_age_hours <= age_hours <= self.max_age_hours:
-                ready_to_release.append(token_addr)
+                ready_scalp.append(token_addr)
             elif age_hours > self.max_age_hours:
                 self._maturing_tokens.pop(token_addr, None)
 
-        for token_addr in ready_to_release:
+        for token_addr in ready_scalp:
             data = self._maturing_tokens.pop(token_addr, {})
             hint = data.get("hint", {})
             if "pair_data" in data and data["pair_data"]:
@@ -153,10 +252,54 @@ class MatureTokenScanner:
             )
             token, is_permanent = await self._evaluate_and_enrich_token(token_addr, hint)
             if token:
-                self._remember_seen_address(token_addr)
+                if token.initial_liquidity_usd >= self.swing_incubator_min_liquidity_usd:
+                    self._maturing_swing_tokens[token_addr] = {
+                        "created_at_ms": data.get("created_at_ms", now_ms - int(self.min_age_hours * 3600 * 1000)),
+                        "hint": hint,
+                        "pair_data": token.raw_event.get("pair_data") if isinstance(token.raw_event, dict) else None,
+                    }
+                    logger.info(
+                        "🔭 [INCUBADORA SWING] Token %s (Liq $%.0f) adicionado para promoção aos %.1fh.",
+                        token.symbol or token_addr[:8],
+                        token.initial_liquidity_usd,
+                        self.min_age_hours_swing,
+                    )
+                self._remember_seen_address(token_addr, stage="SCALP")
                 await self.detection_queue.put(token)
             elif is_permanent:
-                self._remember_seen_address(token_addr)
+                self._remember_seen_address(token_addr, stage="PERMANENT")
+
+        # 2. Maturação Swing (min_age_hours_swing, ex: 2.0h a 6.0h)
+        ready_swing: list[str] = []
+        for token_addr, data in list(self._maturing_swing_tokens.items()):
+            created_ms = data.get("created_at_ms", 0)
+            age_hours = (now_ms - created_ms) / (1000.0 * 3600.0)
+            if self.min_age_hours_swing <= age_hours <= self.max_age_hours_swing:
+                ready_swing.append(token_addr)
+            elif age_hours > self.max_age_hours_swing:
+                self._maturing_swing_tokens.pop(token_addr, None)
+
+        for token_addr in ready_swing:
+            data = self._maturing_swing_tokens.pop(token_addr, {})
+            hint = data.get("hint", {})
+            pair_data = await self._query_dexscreener_pair(token_addr)
+            if pair_data:
+                hint["pair_data"] = pair_data
+            elif "pair_data" in data and data["pair_data"]:
+                hint["pair_data"] = data["pair_data"]
+
+            token, is_permanent = await self._evaluate_and_enrich_token(token_addr, hint)
+            if token:
+                logger.info(
+                    "🎯 [PROMOÇÃO PARA SWING (%.1fh+)] Token %s promovido para fila de auditoria de Swing! (Liq: $%.0f)",
+                    self.min_age_hours_swing,
+                    token.symbol or token_addr[:8],
+                    token.initial_liquidity_usd,
+                )
+                self._remember_seen_address(token_addr, stage="SWING")
+                await self.detection_queue.put(token)
+            elif is_permanent:
+                self._remember_seen_address(token_addr, stage="PERMANENT")
 
     async def _poll_loop(self) -> None:
         """Loop contínuo consultando feeds da DexScreener e GeckoTerminal com pipeline de maturação."""
@@ -191,7 +334,7 @@ class MatureTokenScanner:
         dex_addresses = await self._fetch_dexscreener_candidates()
         unseen_dex_addrs = [
             a for a in dex_addresses
-            if a not in self._seen_addresses and a not in self._maturing_tokens
+            if self._is_candidate_needed(a)
         ]
         if unseen_dex_addrs:
             batch_pairs = await self._query_dexscreener_pairs_batch(unseen_dex_addrs)
@@ -203,7 +346,7 @@ class MatureTokenScanner:
         gecko_pools = await self._fetch_geckoterminal_candidates(pages=1)
         results.extend(gecko_pools)
 
-        # 4. GeckoTerminal Solana Top & Trending Pools (Tokens Consolidados 1d a 1 mês)
+        # 4. GeckoTerminal Solana Top & Trending Pools (Tokens Consolidados 1d a 1 mês e Trending 1h/6h)
         if self.enable_established_pools:
             established_pools = await self._fetch_geckoterminal_established_pools()
             results.extend(established_pools)
@@ -247,9 +390,13 @@ class MatureTokenScanner:
                             and token_addr
                             and isinstance(token_addr, str)
                             and token_addr not in seen_in_batch
-                            and token_addr not in self._seen_addresses
-                            and token_addr not in self._maturing_tokens
+                            and self._is_candidate_needed(token_addr)
                         ):
+                            raw_liq = p.get("liquidity")
+                            liq_dict = raw_liq if isinstance(raw_liq, dict) else {}
+                            liq_usd = float(liq_dict.get("usd") or 0.0)
+                            if liq_usd > 0.0 and (liq_usd < float(self.min_liquidity_usd) or liq_usd > float(self.max_liquidity_usd)):
+                                continue
                             seen_in_batch.add(token_addr)
                             found_candidates.append((token_addr, {"pair_data": p}))
         return found_candidates
@@ -340,27 +487,38 @@ class MatureTokenScanner:
                     )
                     if base_token_id.startswith("solana_"):
                         raw_addr = base_token_id.replace("solana_", "")
-                        hint = {
-                            "pool_created_at": attrs.get("pool_created_at"),
-                            "pool_address": attrs.get("address"),
-                            "reserve_usd": attrs.get("reserve_in_usd"),
-                            "name": attrs.get("name"),
-                        }
-                        pools_out.append((raw_addr, hint))
+                        if self._is_candidate_needed(raw_addr):
+                            reserve_usd = attrs.get("reserve_in_usd")
+                            if reserve_usd is not None:
+                                try:
+                                    if float(reserve_usd) < float(self.min_liquidity_usd):
+                                        continue
+                                except (ValueError, TypeError):
+                                    pass
+                            hint = {
+                                "pool_created_at": attrs.get("pool_created_at"),
+                                "pool_address": attrs.get("address"),
+                                "reserve_usd": reserve_usd,
+                                "name": attrs.get("name"),
+                            }
+                            pools_out.append((raw_addr, hint))
                 except Exception as parse_err:
                     logger.debug("Erro ao parsear pool GeckoTerminal: %s", parse_err)
 
         return pools_out
 
     async def _fetch_geckoterminal_established_pools(self) -> list[tuple[str, dict[str, Any]]]:
-        """Consulta pools consolidadas e em tendência (trending) na Solana via GeckoTerminal (1d a 1 mês)."""
+        """Consulta pools consolidadas e em tendência na Solana via GeckoTerminal rotacionando durações."""
         pools_out: list[tuple[str, dict[str, Any]]] = []
         target_page = self._established_pages_cycle[self._established_cycle_idx % len(self._established_pages_cycle)]
         self._established_cycle_idx += 1
 
+        durations = ["1h", "6h", "24h"]
+        duration = durations[self._established_cycle_idx % len(durations)]
+
         endpoints = [
+            f"{self.geckoterminal_base_url}/api/v2/networks/solana/trending_pools?duration={duration}&page={target_page}",
             f"{self.geckoterminal_base_url}/api/v2/networks/solana/pools?page={target_page}",
-            f"{self.geckoterminal_base_url}/api/v2/networks/solana/trending_pools?page={target_page}",
         ]
         tasks = [self._http_get_json(url) for url in endpoints]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
@@ -376,11 +534,18 @@ class MatureTokenScanner:
                         )
                         if base_token_id.startswith("solana_"):
                             raw_addr = base_token_id.replace("solana_", "")
-                            if raw_addr not in self._seen_addresses and raw_addr not in self._maturing_tokens:
+                            if self._is_candidate_needed(raw_addr):
+                                reserve_usd = attrs.get("reserve_in_usd")
+                                if reserve_usd is not None:
+                                    try:
+                                        if float(reserve_usd) < float(self.min_liquidity_usd):
+                                            continue
+                                    except (ValueError, TypeError):
+                                        pass
                                 hint = {
                                     "pool_created_at": attrs.get("pool_created_at"),
                                     "pool_address": attrs.get("address"),
-                                    "reserve_usd": attrs.get("reserve_in_usd"),
+                                    "reserve_usd": reserve_usd,
                                     "name": attrs.get("name"),
                                 }
                                 pools_out.append((raw_addr, hint))
@@ -463,11 +628,14 @@ class MatureTokenScanner:
         now_utc = datetime.now(UTC)
         age_hours = self._resolve_candidate_age(now_utc, pair_data, hint)
 
+        if age_hours is not None:
+            self._last_age_check[token_address] = (age_hours, now_utc.timestamp())
+
         # Se não conseguimos determinar a idade (ex: erro de rede/rate limit), NÃO descartamos permanentemente
         if age_hours is None:
             return None, False
 
-        # Token jovem demais: registrar no pipeline de maturação para liberar no minuto 15
+        # Token jovem demais: registrar no pipeline de maturação para liberar no minuto 15/30
         if age_hours < self.min_age_hours:
             self._register_maturing_candidate(token_address, age_hours, pair_data, hint)
             return None, False
@@ -483,12 +651,44 @@ class MatureTokenScanner:
             return None, True
 
         dex, pool_address, liquidity_usd, symbol, name, price_usd = self._extract_pool_data(pair_data, hint)
+
+        # Pré-filtro anti-impersonation: descarta clones falsos de SOL, USDC e USDT
+        OFFICIAL_CONTRACTS = {
+            "SOL": "So11111111111111111111111111111111111111112",
+            "WSOL": "So11111111111111111111111111111111111111112",
+            "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+        }
+        sym_clean = str(symbol).upper().strip()
+        if sym_clean in OFFICIAL_CONTRACTS and token_address != OFFICIAL_CONTRACTS[sym_clean]:
+            logger.warning(
+                "🚨 [ANTI-IMPERSONATION] Token %s descartado: Impersonação fraudulenta de %s.",
+                token_address,
+                sym_clean,
+            )
+            return None, True
+
+        # Pré-filtro de liquidez mínima e máxima (anti-fake CLMM):
+        if liquidity_usd < self.min_liquidity_usd or liquidity_usd > self.max_liquidity_usd:
+            logger.debug(
+                "Token %s descartado no pré-filtro: liquidez ($%.2f) fora da faixa segura [$%.2f, $%.2f].",
+                token_address,
+                liquidity_usd,
+                self.min_liquidity_usd,
+                self.max_liquidity_usd,
+            )
+            return None, True
+
         label = f"{symbol} ({name})" if symbol else token_address[:8]
 
         min_desc = f"{int(self.min_age_hours * 60)}m"
         max_desc = f"{int(self.max_age_hours / 24)}d" if self.max_age_hours >= 24.0 else f"{int(self.max_age_hours)}h"
 
-        if age_hours >= 24.0:
+        if self.min_age_hours_swing <= age_hours <= self.max_age_hours_swing:
+            age_desc = f"{age_hours:.2f}h"
+            tag = "🎯 [TOKEN SWING (2H-6H) DETECTADO]"
+            event_name = "SWING_TOKEN_DETECTED"
+        elif age_hours >= 24.0:
             age_desc = f"{age_hours / 24.0:.1f} dias"
             tag = "🏛️ [TOKEN CONSOLIDADO (1D-1M) DETECTADO]"
             event_name = "ESTABLISHED_TOKEN_DETECTED"
@@ -555,18 +755,6 @@ class MatureTokenScanner:
             except Exception:
                 pass
 
-        if created_ms:
-            self._maturing_tokens[token_address] = {
-                "created_at_ms": created_ms,
-                "hint": hint,
-                "pair_data": pair_data,
-            }
-            logger.debug(
-                "Token %s registrado na fila de maturação (idade: %.1f min). Fila ativa: %d pools.",
-                token_address,
-                age_hours * 60.0,
-                len(self._maturing_tokens),
-            )
         if created_ms is None:
             created_ms = int(datetime.now(UTC).timestamp() * 1000)
 

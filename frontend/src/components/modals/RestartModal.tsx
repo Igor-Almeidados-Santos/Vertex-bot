@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AlertTriangle, RotateCcw, X } from "lucide-react";
 import { restartSimulation } from "@/lib/api";
 
@@ -20,6 +20,18 @@ export function RestartModal({
   const [walletAmount, setWalletAmount] = useState<number>(currentInitialWallet || 10.0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      hasInitializedRef.current = false;
+      return;
+    }
+    if (isOpen && !hasInitializedRef.current) {
+      hasInitializedRef.current = true;
+      setWalletAmount(currentInitialWallet || 10.0);
+    }
+  }, [isOpen, currentInitialWallet]);
 
   if (!isOpen) return null;
 

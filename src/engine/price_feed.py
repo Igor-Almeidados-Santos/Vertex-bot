@@ -28,6 +28,7 @@ class DexScreenerPriceFeed:
         self.base_url: str = base_url.rstrip("/")
         self._session: Any | None = None
         self._metadata_cache: dict[str, tuple[str | None, str | None]] = {}
+        self._pair_data_cache: dict[str, dict[str, Any]] = {}
 
     async def _get_session(self) -> Any:
         if HAS_AIOHTTP:
@@ -61,6 +62,10 @@ class DexScreenerPriceFeed:
         """Retorna tupla (symbol, name) do cache para o endereço informado se disponível."""
         return self._metadata_cache.get(address)
 
+    def get_pair_data(self, address: str) -> dict[str, Any] | None:
+        """Retorna o dicionário completo do par mais recente em cache para o token."""
+        return self._pair_data_cache.get(address)
+
     def _parse_pair_item(self, pair: dict[str, Any], prices: dict[str, Decimal]) -> None:
         """Extrai cotação e metadados de um par retornado pela DexScreener."""
         base_token = pair.get("baseToken", {})
@@ -68,6 +73,8 @@ class DexScreenerPriceFeed:
         raw_price = pair.get("priceUsd")
         sym = base_token.get("symbol")
         nm = base_token.get("name")
+        if token_addr:
+            self._pair_data_cache[token_addr] = pair
         if token_addr and (sym or nm):
             self._metadata_cache[token_addr] = (sym, nm)
 

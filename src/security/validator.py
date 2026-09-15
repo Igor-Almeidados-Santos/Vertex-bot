@@ -12,6 +12,7 @@ from src.scanner.client import ResilientRPCClient
 from src.security.checks import SecurityChecks
 from src.security.market_dynamics import MarketDynamicsValidator
 from src.security.simulator import TransactionSimulator
+from src.utils.exceptions import RPCConnectionError
 from src.utils.logger import setup_logger
 
 logger = setup_logger("vertex.security.validator")
@@ -55,98 +56,136 @@ class SecurityValidator:
                 f"Liquidez inicial (${token.initial_liquidity_usd:.2f}) abaixo do mínimo (${self.min_liquidity_usd:.2f})",
             )
 
-        # 2. Checagem de Mint Authority
-        is_mint_revoked = await SecurityChecks.check_mint_authority(
-            token.address,
-            self.rpc_client,
-            mock_override=mo.get("is_mint_revoked") if "is_mint_revoked" in mo else None,  # type: ignore
-        )
-        if not is_mint_revoked:
+        # Se o token já foi previamente catalogado como APPROVED no banco, reutiliza laudo aprovado
+        # e avalia apenas a dinâmica de mercado recente (momentum e liquidez) sem disparar RPCs redundantes
+        if not mo:
+            existing = await self.tokens_repo.get_by_address(token.address)
+            if existing and existing.get("security_status") == SecurityStatus.APPROVED.value:
+                if self.market_validator:
+                    is_dyn_ok, dyn_reason, _ = self.market_validator.evaluate(
+                        token,
+                        strategy_mode=self.strategy_mode,
+                    )
+                    if not is_dyn_ok:
+                        return await self._build_rejection(
+                            token.address,
+                            f"Dinâmica de Mercado insatisfatória: {dyn_reason}",
+                        )
+                return SecurityAuditResult(
+                    token_address=token.address,
+                    status=SecurityStatus.APPROVED,
+                    security_score=float(existing.get("security_score") or 100.0),
+                    is_mint_revoked=True,
+                    is_freeze_revoked=True,
+                    is_lp_burned_or_locked=True,
+                    lp_burn_percentage=100.0,
+                    top10_holder_percentage=0.0,
+                    is_honeypot=False,
+                    buy_tax_percentage=0.0,
+                    sell_tax_percentage=0.0,
+                )
+
+        # 2. Hard Gates On-Chain (Mint, Freeze, LP, Top10, Swap)
+        try:
+            # Checagem de Mint Authority
+            is_mint_revoked = await SecurityChecks.check_mint_authority(
+                token.address,
+                self.rpc_client,
+                mock_override=mo.get("is_mint_revoked") if "is_mint_revoked" in mo else None,  # type: ignore
+            )
+            if not is_mint_revoked:
+                return await self._build_rejection(
+                    token.address,
+                    "Mint Authority ATIVA (risco de emissão infinita)",
+                    is_mint_revoked=False,
+                )
+
+            # Checagem de Freeze Authority
+            is_freeze_revoked = await SecurityChecks.check_freeze_authority(
+                token.address,
+                self.rpc_client,
+                mock_override=mo.get("is_freeze_revoked") if "is_freeze_revoked" in mo else None,  # type: ignore
+            )
+            if not is_freeze_revoked:
+                return await self._build_rejection(
+                    token.address,
+                    "Freeze Authority ATIVA (risco de congelamento de contas)",
+                    is_mint_revoked=True,
+                    is_freeze_revoked=False,
+                )
+
+            # Checagem de LP Queimada / Bloqueada
+            is_lp_safe, burn_pct = await SecurityChecks.check_lp_status(
+                pool_address=token.pool_address,
+                token_address=token.address,
+                dex=token.dex,
+                rpc_client=self.rpc_client,
+                mock_burn_pct=mo.get("lp_burn_pct") if "lp_burn_pct" in mo else None,  # type: ignore
+            )
+            if not is_lp_safe:
+                return await self._build_rejection(
+                    token.address,
+                    f"LP não bloqueada ou queimada insuficientemente ({burn_pct:.1f}% < 98%)",
+                    is_mint_revoked=True,
+                    is_freeze_revoked=True,
+                    is_lp_safe=False,
+                    burn_pct=burn_pct,
+                )
+
+            # Checagem de Concentração de Top 10 Holders
+            top10_pct = await SecurityChecks.check_top10_concentration(
+                token.address,
+                self.rpc_client,
+                mock_pct=mo.get("top10_pct") if "top10_pct" in mo else None,  # type: ignore
+                pool_address=token.pool_address,
+                dex=token.dex,
+            )
+            if top10_pct > self.max_top10_pct:
+                return await self._build_rejection(
+                    token.address,
+                    f"Concentração de Top 10 Holders excessiva ({top10_pct:.1f}% > {self.max_top10_pct:.1f}%)",
+                    is_mint_revoked=True,
+                    is_freeze_revoked=True,
+                    is_lp_safe=True,
+                    burn_pct=burn_pct,
+                    top10_pct=top10_pct,
+                )
+
+            # Simulação de Swap (Honeypot & Taxas)
+            is_honeypot, buy_tax, sell_tax = await TransactionSimulator.simulate_swap(
+                token.address,
+                self.rpc_client,
+                mock_taxes=mo.get("taxes") if "taxes" in mo else None,  # type: ignore
+            )
+            if is_honeypot:
+                return await self._build_rejection(
+                    token.address,
+                    "Honeypot detectado: Simulação de venda revertida",
+                    is_mint_revoked=True,
+                    is_freeze_revoked=True,
+                    is_lp_safe=True,
+                    burn_pct=burn_pct,
+                    top10_pct=top10_pct,
+                    is_honeypot=True,
+                )
+            if buy_tax > self.max_tax_pct or sell_tax > self.max_tax_pct:
+                return await self._build_rejection(
+                    token.address,
+                    f"Taxas abusivas detectadas (Buy: {buy_tax:.1f}%, Sell: {sell_tax:.1f}% > {self.max_tax_pct:.1f}%)",
+                    is_mint_revoked=True,
+                    is_freeze_revoked=True,
+                    is_lp_safe=True,
+                    burn_pct=burn_pct,
+                    top10_pct=top10_pct,
+                    buy_tax=buy_tax,
+                    sell_tax=sell_tax,
+                )
+        except RPCConnectionError as rpc_err:
+            logger.error("Falha de conexão com os nós RPC Solana ao auditar %s: %s", token.address, rpc_err)
             return await self._build_rejection(
                 token.address,
-                "Mint Authority ATIVA (risco de emissão infinita)",
+                f"Erro de conexão com nós RPC Solana ({rpc_err}). Configure uma RPC dedicada (Helius/Quicknode) no .env",
                 is_mint_revoked=False,
-            )
-
-        # 3. Checagem de Freeze Authority
-        is_freeze_revoked = await SecurityChecks.check_freeze_authority(
-            token.address,
-            self.rpc_client,
-            mock_override=mo.get("is_freeze_revoked") if "is_freeze_revoked" in mo else None,  # type: ignore
-        )
-        if not is_freeze_revoked:
-            return await self._build_rejection(
-                token.address,
-                "Freeze Authority ATIVA (risco de congelamento de contas)",
-                is_mint_revoked=True,
-                is_freeze_revoked=False,
-            )
-
-        # 4. Checagem de LP Queimada / Bloqueada
-        is_lp_safe, burn_pct = await SecurityChecks.check_lp_status(
-            pool_address=token.pool_address,
-            token_address=token.address,
-            dex=token.dex,
-            rpc_client=self.rpc_client,
-            mock_burn_pct=mo.get("lp_burn_pct") if "lp_burn_pct" in mo else None,  # type: ignore
-        )
-        if not is_lp_safe:
-            return await self._build_rejection(
-                token.address,
-                f"LP não bloqueada ou queimada insuficientemente ({burn_pct:.1f}% < 98%)",
-                is_mint_revoked=True,
-                is_freeze_revoked=True,
-                is_lp_safe=False,
-                burn_pct=burn_pct,
-            )
-
-        # 5. Checagem de Concentração de Top 10 Holders
-        top10_pct = await SecurityChecks.check_top10_concentration(
-            token.address,
-            self.rpc_client,
-            mock_pct=mo.get("top10_pct") if "top10_pct" in mo else None,  # type: ignore
-            pool_address=token.pool_address,
-            dex=token.dex,
-        )
-        if top10_pct > self.max_top10_pct:
-            return await self._build_rejection(
-                token.address,
-                f"Concentração de Top 10 Holders excessiva ({top10_pct:.1f}% > {self.max_top10_pct:.1f}%)",
-                is_mint_revoked=True,
-                is_freeze_revoked=True,
-                is_lp_safe=True,
-                burn_pct=burn_pct,
-                top10_pct=top10_pct,
-            )
-
-        # 6. Simulação de Swap (Honeypot & Taxas)
-        is_honeypot, buy_tax, sell_tax = await TransactionSimulator.simulate_swap(
-            token.address,
-            self.rpc_client,
-            mock_taxes=mo.get("taxes") if "taxes" in mo else None,  # type: ignore
-        )
-        if is_honeypot:
-            return await self._build_rejection(
-                token.address,
-                "Honeypot detectado: Simulação de venda revertida",
-                is_mint_revoked=True,
-                is_freeze_revoked=True,
-                is_lp_safe=True,
-                burn_pct=burn_pct,
-                top10_pct=top10_pct,
-                is_honeypot=True,
-            )
-        if buy_tax > self.max_tax_pct or sell_tax > self.max_tax_pct:
-            return await self._build_rejection(
-                token.address,
-                f"Taxas abusivas detectadas (Buy: {buy_tax:.1f}%, Sell: {sell_tax:.1f}% > {self.max_tax_pct:.1f}%)",
-                is_mint_revoked=True,
-                is_freeze_revoked=True,
-                is_lp_safe=True,
-                burn_pct=burn_pct,
-                top10_pct=top10_pct,
-                buy_tax=buy_tax,
-                sell_tax=sell_tax,
             )
 
         # Aprovado em todos os 6 Hard Gates!
