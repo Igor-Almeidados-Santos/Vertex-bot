@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     HELIUS_API_KEY: str | None = None
 
     # === NÓS RPC & WEBSOCKETS (SOLANA FALLBACK) ===
-    PRIMARY_RPC_HTTP_URL: str = "https://api.mainnet-beta.solana.com"
+    PRIMARY_RPC_HTTP_URL: str = "https://solana-rpc.publicnode.com"
     SECONDARY_RPC_HTTP_URL: str | None = None
     PRIMARY_RPC_WS_URL: str = "wss://api.mainnet-beta.solana.com"
 
@@ -164,9 +164,12 @@ def get_settings(env_path: str = ".env") -> Settings:
     if settings.HELIUS_API_KEY:
         key = str(settings.HELIUS_API_KEY).strip()
         if key and not any(ph in key for ph in placeholders):
-            if "api.mainnet-beta.solana.com" in settings.PRIMARY_RPC_HTTP_URL:
+            if any(default_node in settings.PRIMARY_RPC_HTTP_URL for default_node in ("api.mainnet-beta.solana.com", "publicnode.com")):
                 settings.PRIMARY_RPC_HTTP_URL = f"https://mainnet.helius-rpc.com/?api-key={key}"
-            if "api.mainnet-beta.solana.com" in settings.PRIMARY_RPC_WS_URL:
+            if any(default_node in settings.PRIMARY_RPC_WS_URL for default_node in ("api.mainnet-beta.solana.com", "publicnode.com")):
                 settings.PRIMARY_RPC_WS_URL = f"wss://mainnet.helius-rpc.com/?api-key={key}"
+    elif settings.PRIMARY_RPC_HTTP_URL == "https://api.mainnet-beta.solana.com":
+        # Se não há chave privada e a URL caiu no nó padrão que bloqueia cloud/VPS, desvia para nó público mais estável
+        settings.PRIMARY_RPC_HTTP_URL = "https://solana-rpc.publicnode.com"
 
     return settings

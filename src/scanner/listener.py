@@ -151,29 +151,23 @@ def create_scanner(
     """Factory que instancia o scanner apropriado com base no provedor configurado."""
     provider = getattr(settings, "SCANNER_PROVIDER", "HYBRID")
 
+    strategy_mode = str(getattr(settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+
     if provider == "HYBRID":
         from src.scanner.composite_scanner import CompositeScanner
         from src.scanner.graduation_scanner import RaydiumGraduationScanner
         from src.scanner.mature_scanner import MatureTokenScanner
 
-        strategy_mode = str(getattr(settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
-        explicit_min_age = getattr(settings, "MIN_TOKEN_AGE_HOURS", None)
-        explicit_max_age = getattr(settings, "MAX_TOKEN_AGE_HOURS", None)
-
         if strategy_mode == "SWING_ONLY":
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)
+            min_age = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", getattr(settings, "MIN_TOKEN_AGE_HOURS", 3.0))
+            max_age = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", getattr(settings, "MAX_TOKEN_AGE_HOURS", 6.0))
         elif strategy_mode == "SCALP_ONLY":
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0)
+            min_age = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", getattr(settings, "MIN_TOKEN_AGE_HOURS", 2.0))
+            max_age = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0))
         else:  # "DUAL"
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0)
+            min_age = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", getattr(settings, "MIN_TOKEN_AGE_HOURS", 2.0))
+            max_age = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0))
 
-        min_age_swing = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)
         min_age_swing = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)
         max_age_swing = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)
         min_liq_usd = _extract_decimal_setting(settings, "MIN_LIQUIDITY_USD", Decimal("5000.0"))
@@ -225,23 +219,16 @@ def create_scanner(
     elif provider == "MATURE_POOLS":
         from src.scanner.mature_scanner import MatureTokenScanner
 
-        strategy_mode = str(getattr(settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
-        explicit_min_age = getattr(settings, "MIN_TOKEN_AGE_HOURS", None)
-        explicit_max_age = getattr(settings, "MAX_TOKEN_AGE_HOURS", None)
         if strategy_mode == "SWING_ONLY":
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)
+            min_age = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", getattr(settings, "MIN_TOKEN_AGE_HOURS", 3.0))
+            max_age = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", getattr(settings, "MAX_TOKEN_AGE_HOURS", 6.0))
         elif strategy_mode == "SCALP_ONLY":
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0)
+            min_age = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", getattr(settings, "MIN_TOKEN_AGE_HOURS", 2.0))
+            max_age = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0))
         else:
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)
-            min_age = float(explicit_min_age) if isinstance(explicit_min_age, (int, float)) else _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)
-            max_age = float(explicit_max_age) if isinstance(explicit_max_age, (int, float)) else _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0)
+            min_age = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SCALP", getattr(settings, "MIN_TOKEN_AGE_HOURS", 2.0))
+            max_age = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SCALP", getattr(settings, "MAX_TOKEN_AGE_HOURS", 720.0))
 
-        min_age_swing = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)
         min_age_swing = _extract_float_setting(settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)
         max_age_swing = _extract_float_setting(settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)
         min_liq_usd = _extract_decimal_setting(settings, "MIN_LIQUIDITY_USD", Decimal("5000.0"))

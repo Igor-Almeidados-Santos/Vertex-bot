@@ -292,7 +292,7 @@ async def test_liquidity_pre_filter() -> None:
     )
 
     now_ms = int(datetime.now(UTC).timestamp() * 1000)
-    one_hour_ago_ms = now_ms - 3600 * 1000
+    three_hours_ago_ms = now_ms - 3 * 3600 * 1000
 
     low_liq_pair = {
         "chainId": "solana",
@@ -300,7 +300,7 @@ async def test_liquidity_pre_filter() -> None:
         "pairAddress": "pool_low",
         "baseToken": {"address": "token_low", "symbol": "LOW"},
         "liquidity": {"usd": 1200.0},  # Abaixo de $5.000!
-        "pairCreatedAt": one_hour_ago_ms,
+        "pairCreatedAt": three_hours_ago_ms,
     }
 
     token, is_perm = await scanner._evaluate_and_enrich_token("token_low", {"pair_data": low_liq_pair})

@@ -90,7 +90,12 @@ export function ConfigModal({ isOpen, onClose, currentSettings, onSaved }: Confi
     setSaving(true);
     setToast(null);
     try {
-      await updateConfig(formData);
+      await updateConfig({
+        ...formData,
+        wallet_balance_usd: formData.paper_initial_wallet_usd,
+        initial_wallet_usd: formData.paper_initial_wallet_usd,
+        paper_initial_wallet_usd: formData.paper_initial_wallet_usd,
+      });
       setToast({ type: "success", message: "Configurações salvas e ativas com sucesso!" });
       onSaved();
       setTimeout(() => {

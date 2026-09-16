@@ -297,7 +297,7 @@ async def test_dual_mode_scalp_only_for_young_token(tmp_path: Path) -> None:
         initial_liquidity_usd=Decimal("34000.0"),
         symbol="PONK",
         raw_event={
-            "age_hours": 0.85,  # 51 minutos de vida (< 2h)
+            "age_hours": 2.2,  # 2.2h de vida (>= 2h para Scalp, mas < 3h para Swing)
             "pair_data": {
                 "volume": {"h1": 50000.0},
                 "priceChange": {"m5": 1.0},

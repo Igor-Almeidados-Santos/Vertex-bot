@@ -82,7 +82,11 @@ export async function startBot(): Promise<{ is_running: boolean }> {
 export async function restartSimulation(initialWalletUsd: number): Promise<void> {
   return fetchJson<void>("/api/bot/restart", {
     method: "POST",
-    body: JSON.stringify({ initial_wallet_usd: initialWalletUsd }),
+    body: JSON.stringify({
+      initial_wallet_usd: initialWalletUsd,
+      wallet_balance_usd: initialWalletUsd,
+      paper_initial_wallet_usd: initialWalletUsd,
+    }),
   });
 }
 

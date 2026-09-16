@@ -130,3 +130,37 @@ async def test_security_validator_reports_rpc_failure_transparently() -> None:
         # O motivo NÃO deve ser a autoridade de mint ativa, mas explicitamente erro de RPC
         assert "Mint Authority ATIVA" not in (result.rejection_reason or "")
         assert "Erro de conexão com nós RPC Solana" in (result.rejection_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_rpc_cooldown_on_429() -> None:
+    """Valida que nó que respondeu 429 entra em cooldown e é ignorado em requisições seguintes."""
+    client = ResilientRPCClient(
+        primary_url="https://node-429.example.com",
+        secondary_url="https://node-healthy.example.com",
+        max_retries=3,
+    )
+
+    history: list[str] = []
+
+    async def mock_post(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        history.append(url)
+        if "node-429" in url:
+            raise RPCConnectionError(f"HTTP 429 de {url}: Too many requests")
+        return {"result": {"value": "ok"}}
+
+    with patch.object(client, "_post_json", side_effect=mock_post):
+        # 1ª chamada: falha no node-429, entra em cooldown, comuta para node-healthy
+        res1 = await client.call("getHealth", [])
+        assert res1.get("result", {}).get("value") == "ok"
+        assert "node-429.example.com" in history[0]
+        assert "node-healthy.example.com" in history[1]
+        assert client._is_cooling_down("https://node-429.example.com")
+
+        # 2ª chamada: deve ir DIRETO para node-healthy sem tentar node-429 novamente
+        history.clear()
+        res2 = await client.call("getHealth", [])
+        assert res2.get("result", {}).get("value") == "ok"
+        assert len(history) == 1
+        assert "node-healthy.example.com" in history[0]
+

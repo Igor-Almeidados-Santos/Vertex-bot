@@ -35,7 +35,7 @@ class MatureTokenScanner:
         self,
         detection_queue: asyncio.Queue[TokenMetadata],
         min_age_hours: float = 2.0,
-        max_age_hours: float = 8.0,
+        max_age_hours: float = 720.0,
         min_age_hours_swing: float = 3.0,
         max_age_hours_swing: float = 6.0,
         min_liquidity_usd: Decimal = Decimal("5000.0"),
@@ -228,6 +228,20 @@ class MatureTokenScanner:
 
         now_utc = datetime.now(UTC)
         now_ms = int(now_utc.timestamp() * 1000)
+
+        # Log de status periódico da incubadora (a cada 60s)
+        if not hasattr(self, "_last_incubator_log_ts"):
+            self._last_incubator_log_ts = 0.0
+        now_ts = now_utc.timestamp()
+        if now_ts - self._last_incubator_log_ts >= 60.0 and (self._maturing_tokens or self._maturing_swing_tokens):
+            self._last_incubator_log_ts = now_ts
+            logger.info(
+                "🍼 [INCUBADORA ATIVA] %d tokens aguardando %.0f min para liberação (Scalp) | %d monitorados para Swing (%.1fh).",
+                len(self._maturing_tokens),
+                self.min_age_hours * 60.0,
+                len(self._maturing_swing_tokens),
+                self.min_age_hours_swing,
+            )
 
         # 1. Maturação Scalp (< min_age_hours -> min_age_hours, ex: 15m a 30m)
         ready_scalp: list[str] = []
@@ -668,7 +682,7 @@ class MatureTokenScanner:
             )
             return None, True
 
-        # Pré-filtro de liquidez mínima e máxima (anti-fake CLMM):
+        # Pré-filtro de liquidez mínima e máxima (anti-fake CLMM e pools sem liquidez):
         if liquidity_usd < self.min_liquidity_usd or liquidity_usd > self.max_liquidity_usd:
             logger.debug(
                 "Token %s descartado no pré-filtro: liquidez ($%.2f) fora da faixa segura [$%.2f, $%.2f].",
@@ -758,17 +772,34 @@ class MatureTokenScanner:
         if created_ms is None:
             created_ms = int(datetime.now(UTC).timestamp() * 1000)
 
+        is_new = token_address not in self._maturing_tokens
         self._maturing_tokens[token_address] = {
             "created_at_ms": created_ms,
             "hint": hint,
             "pair_data": pair_data,
         }
-        logger.debug(
-            "Token %s registrado na fila de maturação (idade: %.1f min). Fila ativa: %d pools.",
-            token_address,
-            age_hours * 60.0,
-            len(self._maturing_tokens),
-        )
+
+        if is_new:
+            sym: str | None = None
+            if pair_data and isinstance(pair_data, dict):
+                sym = pair_data.get("baseToken", {}).get("symbol")
+            elif hint and isinstance(hint, dict):
+                sym = hint.get("symbol") or hint.get("name")
+            label = f"{sym} ({token_address[:8]}...)" if sym else f"{token_address[:8]}..."
+            logger.info(
+                "⏳ [INCUBADORA ANTI-DUMP] Token %s detectado com %.1f min de vida. Armazenado na incubadora (liberação aos %.0f min). Total incubados: %d",
+                label,
+                age_hours * 60.0,
+                self.min_age_hours * 60.0,
+                len(self._maturing_tokens),
+            )
+        else:
+            logger.debug(
+                "Token %s atualizado na fila de maturação (idade: %.1f min). Fila ativa: %d pools.",
+                token_address,
+                age_hours * 60.0,
+                len(self._maturing_tokens),
+            )
 
     async def _query_dexscreener_pair(self, token_address: str) -> dict[str, Any] | None:
         """Consulta as pools ativas do token na DexScreener para obter o melhor par."""

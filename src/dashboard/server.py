@@ -149,8 +149,10 @@ class DashboardServer:
         wallet_usd = 0.0
         active_positions_count = 0
         engine = getattr(self.orchestrator, "execution_engine", None)
-        if engine:
+        if engine and hasattr(engine, "balance_usd"):
             wallet_usd = float(engine.balance_usd)
+        elif hasattr(self.orchestrator, "settings"):
+            wallet_usd = float(getattr(self.orchestrator.settings, "PAPER_INITIAL_WALLET_USD", 10.0))
         tracker = getattr(self.orchestrator, "position_tracker", None)
         if tracker:
             active_positions_count = len(tracker.active_positions)
@@ -161,18 +163,24 @@ class DashboardServer:
         if self.orchestrator:
             return self._get_bot_status_from_orchestrator()
 
+        fallback_wallet = self._get_decoupled_initial_wallet()
         if STATUS_FILE.exists():
             try:
                 data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
                 ts = float(data.get("timestamp", 0.0))
                 now_ts = datetime.now(UTC).timestamp()
-                if (now_ts - ts) <= 6.0 and data.get("is_running", False):
+                wallet_val = _safe_float(data.get("wallet_balance_usd", fallback_wallet), fallback_wallet)
+                active_count = int(data.get("active_positions_count", 0))
+                is_running = bool(data.get("is_running", False))
+                is_paused = bool(data.get("is_paused", False))
+                if (now_ts - ts) <= 6.0 and is_running:
                     return (
                         True,
-                        bool(data.get("is_paused", False)),
-                        float(data.get("wallet_balance_usd", 0.0)),
-                        int(data.get("active_positions_count", 0)),
+                        is_paused,
+                        wallet_val,
+                        active_count,
                     )
+                return False, is_paused, wallet_val, active_count
             except Exception as exc:
                 logger.debug("Erro ao ler data/bot_status.json: %s", exc)
 
@@ -230,7 +238,7 @@ class DashboardServer:
                     "wallet_balance_usd": _safe_float(getattr(settings_obj, "PAPER_INITIAL_WALLET_USD", 10.0), 10.0),
                     "paper_initial_wallet_usd": _safe_float(getattr(settings_obj, "PAPER_INITIAL_WALLET_USD", 10.0), 10.0),
                     "min_trade_amount_usd": _safe_float(getattr(settings_obj, "MIN_TRADE_AMOUNT_USD", 1.0), 1.0),
-                    "max_token_age_hours": _safe_float(getattr(settings_obj, "MAX_TOKEN_AGE_HOURS", 3.0), 3.0),
+                    "max_token_age_hours": _safe_float(getattr(settings_obj, "MAX_TOKEN_AGE_HOURS_SCALP", getattr(settings_obj, "MAX_TOKEN_AGE_HOURS", 720.0)), 720.0),
                     "break_even_gain_pct": _safe_float(getattr(settings_obj, "BREAK_EVEN_GAIN_PCT", 100.0), 100.0),
                     "trailing_stop_drop_pct": _safe_float(getattr(settings_obj, "TRAILING_STOP_DROP_PCT", 12.0), 12.0),
                     "emergency_stop_loss_pct": _safe_float(getattr(settings_obj, "EMERGENCY_STOP_LOSS_PCT", 20.0), 20.0),
@@ -251,14 +259,15 @@ class DashboardServer:
                     "swing_tier4_mult": _safe_float(getattr(settings_obj, "SWING_TIER4_TARGET_MULT", 11.0), 11.0),
                     "swing_tier5_mult": _safe_float(getattr(settings_obj, "SWING_TIER5_TARGET_MULT", 21.0), 21.0),
                     "swing_trailing_drop_pct": _safe_float(getattr(settings_obj, "SWING_TRAILING_DROP_PCT", 25.0), 25.0),
-                    "min_token_age_scalp_min": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5), 0.5) * 60.0,
-                    "min_token_age_swing_hours": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SWING", 2.0), 2.0),
                     "min_token_age_scalp_min": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0), 2.0) * 60.0,
                     "min_token_age_swing_hours": _safe_float(getattr(settings_obj, "MIN_TOKEN_AGE_HOURS_SWING", 3.0), 3.0),
+                    "max_token_age_swing_hours": _safe_float(getattr(settings_obj, "MAX_TOKEN_AGE_HOURS_SWING", 6.0), 6.0),
                     "min_volume_1h_usd": _safe_float(getattr(settings_obj, "MIN_VOLUME_1H_USD", 15000.0), 15000.0),
                     "min_buy_ratio_5m_pct": _safe_float(getattr(settings_obj, "MIN_BUY_RATIO_5M_PCT", 50.0), 50.0),
                     "min_price_change_5m_pct": _safe_float(getattr(settings_obj, "MIN_PRICE_CHANGE_5M_PCT", -2.0), -2.0),
                     "min_liquidity_swing_usd": _safe_float(getattr(settings_obj, "MIN_LIQUIDITY_SWING_USD", 20000.0), 20000.0),
+                    "max_top10_holders_pct": _safe_float(getattr(settings_obj, "MAX_TOP10_HOLDERS_PCT", 15.0), 15.0),
+                    "min_liquidity_usd": _safe_float(getattr(settings_obj, "MIN_LIQUIDITY_USD", 5000.0), 5000.0),
                 }
 
         cfg: dict[str, Any] = {}
@@ -304,8 +313,9 @@ class DashboardServer:
             "swing_tier4_mult": _safe_float(cfg.get("swing_tier4_mult"), 11.0),
             "swing_tier5_mult": _safe_float(cfg.get("swing_tier5_mult"), 21.0),
             "swing_trailing_drop_pct": _safe_float(cfg.get("swing_trailing_drop_pct"), 25.0),
-            "min_token_age_scalp_min": _safe_float(cfg.get("min_token_age_scalp_min"), 30.0),
-            "min_token_age_swing_hours": _safe_float(cfg.get("min_token_age_swing_hours"), 2.0),
+            "min_token_age_scalp_min": _safe_float(cfg.get("min_token_age_scalp_min"), 120.0),
+            "min_token_age_swing_hours": _safe_float(cfg.get("min_token_age_swing_hours"), 3.0),
+            "max_token_age_swing_hours": _safe_float(cfg.get("max_token_age_swing_hours"), 6.0),
             "min_volume_1h_usd": _safe_float(cfg.get("min_volume_1h_usd"), 15000.0),
             "min_buy_ratio_5m_pct": _safe_float(cfg.get("min_buy_ratio_5m_pct"), 50.0),
             "min_price_change_5m_pct": _safe_float(cfg.get("min_price_change_5m_pct"), -2.0),
@@ -389,11 +399,11 @@ class DashboardServer:
         initial_wallet = self._get_active_initial_wallet()
         if self.orchestrator:
             engine = getattr(self.orchestrator, "execution_engine", None)
-            current_cash = float(engine.balance_usd) if engine and hasattr(engine, "balance_usd") else None
+            current_cash = float(engine.balance_usd) if engine and hasattr(engine, "balance_usd") else initial_wallet
             return initial_wallet, current_cash
 
         _, _, wallet_usd, _ = self._get_bot_status()
-        current_cash = wallet_usd if wallet_usd > 0.0 else None
+        current_cash = wallet_usd if wallet_usd > 0.0 else initial_wallet
         return initial_wallet, current_cash
 
     async def handle_summary(self, _request: web.Request) -> web.Response:
@@ -635,22 +645,52 @@ class DashboardServer:
             body = await request.json() if request.can_read_body else {}
         except Exception:
             body = {}
-        new_balance_str = body.get("wallet_balance_usd")
-        new_balance = Decimal(str(new_balance_str)) if new_balance_str is not None else None
+        new_balance_raw = (
+            body.get("initial_wallet_usd")
+            if body.get("initial_wallet_usd") is not None
+            else (
+                body.get("wallet_balance_usd")
+                if body.get("wallet_balance_usd") is not None
+                else body.get("paper_initial_wallet_usd")
+            )
+        )
+        new_balance = Decimal(str(new_balance_raw)) if new_balance_raw is not None else None
 
         if self.orchestrator:
             await self.orchestrator.restart_paper_session(new_balance=new_balance)
         else:
             await self.positions_repo.clear_paper_trading_data()
-            await asyncio.to_thread(self._reset_paper_session_file, float(new_balance) if new_balance is not None else None)
+            bal_float = float(new_balance) if new_balance is not None else self._get_decoupled_initial_wallet()
+            await asyncio.to_thread(self._reset_paper_session_file, bal_float)
+            cfg = self._get_active_settings()
+            cfg["wallet_balance_usd"] = bal_float
+            cfg["paper_initial_wallet_usd"] = bal_float
+            await asyncio.to_thread(self._save_config_file, cfg)
+            try:
+                if STATUS_FILE.exists():
+                    st_data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+                    st_data["wallet_balance_usd"] = bal_float
+                    st_data["initial_wallet_usd"] = bal_float
+                    STATUS_FILE.write_text(json.dumps(st_data, indent=2), encoding="utf-8")
+            except Exception:
+                pass
             self._write_ipc_command(
                 "restart",
-                {"wallet_balance_usd": float(new_balance) if new_balance is not None else None},
+                {
+                    "wallet_balance_usd": bal_float,
+                    "initial_wallet_usd": bal_float,
+                    "paper_initial_wallet_usd": bal_float,
+                },
             )
 
+        active_bal = float(new_balance) if new_balance is not None else self._get_active_initial_wallet()
         return web.json_response({
             "status": "success",
             "message": "Simulação reiniciada com sucesso. Trades limpos e contador iniciado em #1.",
+            "data": {
+                "wallet_balance_usd": active_bal,
+                "initial_wallet_usd": active_bal,
+            },
         })
 
     async def handle_bot_stop(self, _request: web.Request) -> web.Response:
@@ -666,10 +706,29 @@ class DashboardServer:
         try:
             raw_payload = await request.json()
             payload = {k: v for k, v in raw_payload.items() if v is not None}
-            if "wallet_balance_usd" in payload:
+            wallet_raw = (
+                payload.get("paper_initial_wallet_usd")
+                if payload.get("paper_initial_wallet_usd") is not None
+                else (
+                    payload.get("wallet_balance_usd")
+                    if payload.get("wallet_balance_usd") is not None
+                    else payload.get("initial_wallet_usd")
+                )
+            )
+            if wallet_raw is not None:
                 try:
-                    bal_val = float(payload["wallet_balance_usd"])
+                    bal_val = float(wallet_raw)
+                    payload["wallet_balance_usd"] = bal_val
+                    payload["paper_initial_wallet_usd"] = bal_val
                     self._update_paper_session_initial_wallet(bal_val)
+                    if not self.orchestrator and STATUS_FILE.exists():
+                        try:
+                            st_data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+                            st_data["wallet_balance_usd"] = bal_val
+                            st_data["initial_wallet_usd"] = bal_val
+                            STATUS_FILE.write_text(json.dumps(st_data, indent=2), encoding="utf-8")
+                        except Exception:
+                            pass
                 except (ValueError, TypeError):
                     pass
 

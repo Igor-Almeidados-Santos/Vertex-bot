@@ -12,6 +12,7 @@ try:
 except ImportError:
     HAS_AIOHTTP = False
 
+import time
 import urllib.error
 import urllib.request
 from typing import Any, cast
@@ -45,9 +46,9 @@ def is_valid_rpc_url(url: str | None) -> bool:
 
 
 PUBLIC_FALLBACK_RPCS: list[str] = [
-    "https://api.mainnet-beta.solana.com",
     "https://solana-rpc.publicnode.com",
     "https://rpc.ankr.com/solana",
+    "https://api.mainnet-beta.solana.com",
 ]
 
 
@@ -84,13 +85,34 @@ class ResilientRPCClient:
         self.primary_url: str = self.endpoints[0]
         self.secondary_url: str | None = self.endpoints[1] if len(self.endpoints) > 1 else None
         self._current_url: str = self.endpoints[0]
+        self._cooldowns: dict[str, float] = {}
+        self._warned_about_helius: bool = False
+
+    def _is_cooling_down(self, url: str) -> bool:
+        """Verifica se um nó RPC está em período de resfriamento (cooldown)."""
+        return time.monotonic() < self._cooldowns.get(url, 0.0)
 
     def _rotate_endpoint(self) -> str:
-        """Comuta para o próximo endpoint disponível no pool circular."""
-        if len(self.endpoints) > 1:
-            self._endpoint_index = (self._endpoint_index + 1) % len(self.endpoints)
-            self._current_url = self.endpoints[self._endpoint_index]
-            logger.info("Comutando para nó RPC alternativo no pool: %s", self._current_url)
+        """Comuta para o próximo endpoint disponível no pool circular, priorizando nós sem cooldown."""
+        if len(self.endpoints) <= 1:
+            return self._current_url
+
+        now = time.monotonic()
+        # Procura o próximo nó saudável (fora de cooldown)
+        for i in range(1, len(self.endpoints) + 1):
+            cand_idx = (self._endpoint_index + i) % len(self.endpoints)
+            cand_url = self.endpoints[cand_idx]
+            if now >= self._cooldowns.get(cand_url, 0.0):
+                self._endpoint_index = cand_idx
+                self._current_url = cand_url
+                logger.info("Comutando para nó RPC saudável no pool: %s", self._current_url)
+                return self._current_url
+
+        # Se todos estiverem em cooldown, escolhe o que expira mais cedo
+        best_url = min(self.endpoints, key=lambda ep: self._cooldowns.get(ep, 0.0))
+        self._endpoint_index = self.endpoints.index(best_url)
+        self._current_url = best_url
+        logger.info("Todos os nós RPC em cooldown. Selecionando nó com menor tempo restante: %s", self._current_url)
         return self._current_url
 
     def _get_next_id(self) -> int:
@@ -138,13 +160,17 @@ class ResilientRPCClient:
             return await asyncio.to_thread(self._sync_post, url, payload_bytes)
 
     async def call(self, method: str, params: list[Any]) -> dict[str, Any]:
-        """Realiza chamada JSON-RPC com retries e failover automático entre nós."""
+        """Realiza chamada JSON-RPC com retries, cooldown de 429 e failover automático entre nós."""
         payload = {
             "jsonrpc": "2.0",
             "id": self._get_next_id(),
             "method": method,
             "params": params,
         }
+
+        # Garante que não inicia em um nó atualmente sob cooldown
+        if self._is_cooling_down(self._current_url):
+            self._rotate_endpoint()
 
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
@@ -172,13 +198,36 @@ class ResilientRPCClient:
                 return response
             except Exception as exc:
                 last_error = exc
-                logger.warning(
-                    "Falha na tentativa %d/%d com nó RPC %s: %s",
-                    attempt,
-                    self.max_retries,
-                    target_url,
-                    exc,
+                err_str = str(exc).lower()
+                is_rate_limit = (
+                    "429" in err_str
+                    or "rate limit" in err_str
+                    or "too many requests" in err_str
+                    or "-32005" in err_str
                 )
+                if is_rate_limit:
+                    self._cooldowns[target_url] = time.monotonic() + 60.0
+                    logger.warning(
+                        "Falha na tentativa %d/%d com nó RPC %s: Rate-limit (429) detectado. Nó em resfriamento por 60s. (%s)",
+                        attempt,
+                        self.max_retries,
+                        target_url,
+                        exc,
+                    )
+                    if "api.mainnet-beta.solana.com" in target_url and not self._warned_about_helius:
+                        self._warned_about_helius = True
+                        logger.info(
+                            "💡 DICA: O nó público padrão da Solana bloqueia provedores de nuvem/VPS. "
+                            "Configure HELIUS_API_KEY no arquivo .env para conexão RPC privada com alta performance."
+                        )
+                else:
+                    logger.warning(
+                        "Falha na tentativa %d/%d com nó RPC %s: %s",
+                        attempt,
+                        self.max_retries,
+                        target_url,
+                        exc,
+                    )
                 self._rotate_endpoint()
 
                 if attempt == self.max_retries:

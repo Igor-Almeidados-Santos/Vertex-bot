@@ -205,6 +205,9 @@ class VertexBotOrchestrator:
         try:
             raw = json.loads(cfg_file.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
+                strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+                if raw.get("max_token_age_hours") == 3.0 and strat_mode in ("DUAL", "SCALP_ONLY"):
+                    raw["max_token_age_hours"] = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
                 self._apply_config_payload(raw, save_to_disk=False)
                 logger.info("⚙️ [CONFIGURAÇÕES PERSISTIDAS RESTAURADAS] data/bot_config.json aplicado com sucesso.")
         except Exception as exc:
@@ -219,8 +222,9 @@ class VertexBotOrchestrator:
                 "paper_buy_amount_usd": float(self.settings.PAPER_BUY_AMOUNT_USD),
                 "max_concurrent_positions": int(self.settings.MAX_CONCURRENT_POSITIONS),
                 "wallet_balance_usd": float(self.execution_engine.balance_usd),
+                "paper_initial_wallet_usd": float(self.settings.PAPER_INITIAL_WALLET_USD),
                 "min_trade_amount_usd": float(self.settings.MIN_TRADE_AMOUNT_USD),
-                "max_token_age_hours": float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS", 3.0)),
+                "max_token_age_hours": float(self.settings.MAX_TOKEN_AGE_HOURS),
                 "break_even_gain_pct": float(self.settings.BREAK_EVEN_GAIN_PCT),
                 "trailing_stop_drop_pct": float(self.settings.TRAILING_STOP_DROP_PCT),
                 "emergency_stop_loss_pct": float(self.settings.EMERGENCY_STOP_LOSS_PCT),
@@ -241,8 +245,6 @@ class VertexBotOrchestrator:
                 "swing_tier4_mult": float(self.settings.SWING_TIER4_TARGET_MULT),
                 "swing_tier5_mult": float(getattr(self.settings, "SWING_TIER5_TARGET_MULT", 21.0)),
                 "swing_trailing_drop_pct": float(self.settings.SWING_TRAILING_DROP_PCT),
-                "min_token_age_scalp_min": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)) * 60.0,
-                "min_token_age_swing_hours": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)),
                 "min_token_age_scalp_min": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)) * 60.0,
                 "min_token_age_swing_hours": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)),
                 "max_token_age_swing_hours": float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)),
@@ -371,6 +373,7 @@ class VertexBotOrchestrator:
         self.execution_engine.balance_usd = target_balance
         self._write_paper_session_state(initial_balance=target_balance)
         self._save_persisted_config()
+        self._write_heartbeat_sync(self.is_running)
         logger.info("Sessão simulada reiniciada com sucesso. Saldo disponível: $%.2f", target_balance)
 
     def update_dynamic_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -437,15 +440,24 @@ class VertexBotOrchestrator:
                 self.settings.MIN_TRADE_AMOUNT_USD = min(self.settings.MIN_TRADE_AMOUNT_USD, buy_val)
         if payload.get("max_concurrent_positions") is not None:
             self.settings.MAX_CONCURRENT_POSITIONS = int(payload["max_concurrent_positions"])
-        if payload.get("paper_initial_wallet_usd") is not None:
-            self.settings.PAPER_INITIAL_WALLET_USD = Decimal(str(payload["paper_initial_wallet_usd"]))
-        elif payload.get("initial_wallet_usd") is not None:
-            self.settings.PAPER_INITIAL_WALLET_USD = Decimal(str(payload["initial_wallet_usd"]))
-        elif payload.get("wallet_balance_usd") is not None:
-            bal = Decimal(str(payload["wallet_balance_usd"]))
-            self.settings.PAPER_INITIAL_WALLET_USD = bal
-            if not self.is_running and len(self.position_tracker.active_positions) == 0:
-                self.execution_engine.balance_usd = bal
+        wallet_val_raw = payload.get("paper_initial_wallet_usd") if payload.get("paper_initial_wallet_usd") is not None else (
+            payload.get("wallet_balance_usd") if payload.get("wallet_balance_usd") is not None else payload.get("initial_wallet_usd")
+        )
+        if wallet_val_raw is not None:
+            try:
+                new_wallet = Decimal(str(wallet_val_raw))
+                if new_wallet > Decimal("0.0"):
+                    self.settings.PAPER_INITIAL_WALLET_USD = new_wallet
+                    allocated = sum(
+                        (p.allocated_capital_usd for p in self.position_tracker.active_positions.values()),
+                        Decimal("0.0"),
+                    )
+                    self.execution_engine.balance_usd = max(Decimal("0.0"), new_wallet - allocated)
+                    self._write_paper_session_state(initial_balance=new_wallet)
+                    self._write_heartbeat_sync(self.is_running)
+                    logger.info("💰 Saldo da carteira atualizado para $%.2f (Disponível: $%.2f, Alocado: $%.2f)", new_wallet, self.execution_engine.balance_usd, allocated)
+            except Exception as exc:
+                logger.warning("Falha ao atualizar saldo da carteira: %s", exc)
         if payload.get("min_trade_amount_usd") is not None:
             req_min = Decimal(str(payload["min_trade_amount_usd"]))
             self.settings.MIN_TRADE_AMOUNT_USD = min(req_min, self.settings.PAPER_BUY_AMOUNT_USD)
@@ -453,7 +465,8 @@ class VertexBotOrchestrator:
             self.settings.MAX_SLIPPAGE_PCT = Decimal(str(payload["max_slippage_pct"]))
             self.execution_engine.max_slippage_pct = self.settings.MAX_SLIPPAGE_PCT / Decimal("100.0")
         if payload.get("max_token_age_hours") is not None:
-            self._update_scanner_max_age(float(payload["max_token_age_hours"]))
+            self.settings.MAX_TOKEN_AGE_HOURS = float(payload["max_token_age_hours"])
+            self._update_scanner_max_age(self.settings.MAX_TOKEN_AGE_HOURS)
 
     def _apply_risk_config(self, payload: dict[str, Any]) -> None:
         """Aplica parâmetros de risco (break-even, trailing stop, stop loss, scalp timing/alvo, dual-track e swing ratchet)."""
@@ -609,7 +622,7 @@ class VertexBotOrchestrator:
             "paper_buy_amount_usd": float(self.settings.PAPER_BUY_AMOUNT_USD),
             "max_concurrent_positions": self.settings.MAX_CONCURRENT_POSITIONS,
             "wallet_balance_usd": float(self.execution_engine.balance_usd),
-            "max_token_age_hours": float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS", 3.0)),
+            "max_token_age_hours": float(self.settings.MAX_TOKEN_AGE_HOURS),
             "break_even_gain_pct": float(self.settings.BREAK_EVEN_GAIN_PCT),
             "trailing_stop_drop_pct": float(self.settings.TRAILING_STOP_DROP_PCT),
             "emergency_stop_loss_pct": float(self.settings.EMERGENCY_STOP_LOSS_PCT),
@@ -630,8 +643,6 @@ class VertexBotOrchestrator:
             "swing_tier4_mult": float(self.settings.SWING_TIER4_TARGET_MULT),
             "swing_tier5_mult": float(getattr(self.settings, "SWING_TIER5_TARGET_MULT", 21.0)),
             "swing_trailing_drop_pct": float(self.settings.SWING_TRAILING_DROP_PCT),
-            "min_token_age_scalp_min": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5)) * 60.0,
-            "min_token_age_swing_hours": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0)),
             "min_token_age_scalp_min": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0)) * 60.0,
             "min_token_age_swing_hours": float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0)),
             "max_token_age_swing_hours": float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0)),
@@ -743,7 +754,15 @@ class VertexBotOrchestrator:
             if amt_str is not None:
                 self.deposit_wallet(Decimal(str(amt_str)))
         elif command == "restart":
-            bal_str = payload.get("wallet_balance_usd")
+            bal_str = (
+                payload.get("wallet_balance_usd")
+                if payload.get("wallet_balance_usd") is not None
+                else (
+                    payload.get("initial_wallet_usd")
+                    if payload.get("initial_wallet_usd") is not None
+                    else payload.get("paper_initial_wallet_usd")
+                )
+            )
             bal = Decimal(str(bal_str)) if bal_str is not None else None
             await self.restart_paper_session(new_balance=bal)
         elif command == "stop":
@@ -828,7 +847,12 @@ class VertexBotOrchestrator:
         try:
             raw_cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
             if isinstance(raw_cfg, dict):
-                self._apply_config_payload(raw_cfg, save_to_disk=False)
+                # Não sobrescreve o saldo livre da carteira durante sincronizações de rotina de entrada
+                sync_payload = {
+                    k: v for k, v in raw_cfg.items()
+                    if k not in ("wallet_balance_usd", "paper_initial_wallet_usd", "initial_wallet_usd")
+                }
+                self._apply_config_payload(sync_payload, save_to_disk=False)
         except Exception:
             pass
 
@@ -1070,16 +1094,12 @@ class VertexBotOrchestrator:
         # 1. Validação estrita de idade do token no mercado (Scalp: 2h-720h, Swing: 3h-6h)
         strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
         if strat_mode == "SWING_ONLY":
-            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 2.0))
             min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0))
             max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0))
         elif strat_mode == "SCALP_ONLY":
-            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
             min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0))
             max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
         else:
-            # No modo DUAL, aceita tokens dentro da janela ampla de Scalp (0.5h a 720h)
-            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 0.5))
             # No modo DUAL, aceita tokens dentro da janela ampla de Scalp (2.0h a 720h)
             min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0))
             max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))

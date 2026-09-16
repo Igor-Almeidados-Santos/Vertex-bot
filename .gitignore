@@ -42,6 +42,12 @@ data/*.db-shm
 *.sqlite3
 *.db
 
+# Transient runtime state
+data/bot_status.json
+data/paper_session.json
+data/waiting_tokens.json
+data/bot_control.json
+
 # Logs and telemetry
 logs/
 *.log
