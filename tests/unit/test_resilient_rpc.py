@@ -35,11 +35,11 @@ def test_resilient_rpc_endpoints_construction() -> None:
     )
     # A URL secundária dummy não deve entrar no pool
     assert "https://solana-mainnet.g.alchemy.com/v2/YOUR-KEY" not in client.endpoints
-    # Deve conter o nó primário e os fallbacks
+    # Deve conter o nó primário e os fallbacks válidos
     assert "https://api.mainnet-beta.solana.com" in client.endpoints
     assert "https://solana-rpc.publicnode.com" in client.endpoints
-    assert "https://rpc.ankr.com/solana" in client.endpoints
-    assert len(client.endpoints) >= 3
+    assert "https://rpc.ankr.com/solana" not in client.endpoints
+    assert len(client.endpoints) >= 2
 
 
 @pytest.mark.asyncio

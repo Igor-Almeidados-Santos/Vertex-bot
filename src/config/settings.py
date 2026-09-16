@@ -38,12 +38,12 @@ class Settings(BaseSettings):
     # === AGREGADORES E ROTEAMENTO (JUPITER / JITO) ===
     JUPITER_QUOTE_API_URL: str = "https://quote-api.jup.ag/v6/quote"
     JUPITER_SWAP_API_URL: str = "https://quote-api.jup.ag/v6/swap"
-    HELIUS_API_KEY: str | None = None
+    HELIUS_API_KEY: str | None = "b58666c5-72ea-46a6-b496-aae641ddd71a"
 
     # === NÓS RPC & WEBSOCKETS (SOLANA FALLBACK) ===
-    PRIMARY_RPC_HTTP_URL: str = "https://solana-rpc.publicnode.com"
+    PRIMARY_RPC_HTTP_URL: str = "https://mainnet.helius-rpc.com/?api-key=b58666c5-72ea-46a6-b496-aae641ddd71a"
     SECONDARY_RPC_HTTP_URL: str | None = None
-    PRIMARY_RPC_WS_URL: str = "wss://api.mainnet-beta.solana.com"
+    PRIMARY_RPC_WS_URL: str = "wss://mainnet.helius-rpc.com/?api-key=b58666c5-72ea-46a6-b496-aae641ddd71a"
 
     # === BANCO DE DADOS ===
     SQLITE_DB_PATH: str = "data/vertex_bot.db"
@@ -164,9 +164,9 @@ def get_settings(env_path: str = ".env") -> Settings:
     if settings.HELIUS_API_KEY:
         key = str(settings.HELIUS_API_KEY).strip()
         if key and not any(ph in key for ph in placeholders):
-            if any(default_node in settings.PRIMARY_RPC_HTTP_URL for default_node in ("api.mainnet-beta.solana.com", "publicnode.com")):
+            if any(default_node in settings.PRIMARY_RPC_HTTP_URL for default_node in ("api.mainnet-beta.solana.com", "publicnode.com", "helius-rpc.com")):
                 settings.PRIMARY_RPC_HTTP_URL = f"https://mainnet.helius-rpc.com/?api-key={key}"
-            if any(default_node in settings.PRIMARY_RPC_WS_URL for default_node in ("api.mainnet-beta.solana.com", "publicnode.com")):
+            if any(default_node in settings.PRIMARY_RPC_WS_URL for default_node in ("api.mainnet-beta.solana.com", "publicnode.com", "helius-rpc.com")):
                 settings.PRIMARY_RPC_WS_URL = f"wss://mainnet.helius-rpc.com/?api-key={key}"
     elif settings.PRIMARY_RPC_HTTP_URL == "https://api.mainnet-beta.solana.com":
         # Se não há chave privada e a URL caiu no nó padrão que bloqueia cloud/VPS, desvia para nó público mais estável

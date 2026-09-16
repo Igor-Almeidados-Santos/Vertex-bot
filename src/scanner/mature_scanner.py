@@ -786,7 +786,7 @@ class MatureTokenScanner:
             elif hint and isinstance(hint, dict):
                 sym = hint.get("symbol") or hint.get("name")
             label = f"{sym} ({token_address[:8]}...)" if sym else f"{token_address[:8]}..."
-            logger.info(
+            logger.debug(
                 "⏳ [INCUBADORA ANTI-DUMP] Token %s detectado com %.1f min de vida. Armazenado na incubadora (liberação aos %.0f min). Total incubados: %d",
                 label,
                 age_hours * 60.0,

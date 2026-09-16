@@ -47,7 +47,6 @@ def is_valid_rpc_url(url: str | None) -> bool:
 
 PUBLIC_FALLBACK_RPCS: list[str] = [
     "https://solana-rpc.publicnode.com",
-    "https://rpc.ankr.com/solana",
     "https://api.mainnet-beta.solana.com",
 ]
 
@@ -194,7 +193,10 @@ class ResilientRPCClient:
                             )
                         ):
                             raise RPCConnectionError(f"Erro de capacidade/limite no RPC {target_url}: {err_obj}")
-                    logger.warning("Aviso retornado pelo nó RPC (%s): %s", target_url, err_obj)
+                    if isinstance(err_obj, dict) and err_obj.get("code") == -32602:
+                        logger.debug("Aviso retornado pelo nó RPC (%s): %s", target_url, err_obj)
+                    else:
+                        logger.warning("Aviso retornado pelo nó RPC (%s): %s", target_url, err_obj)
                 return response
             except Exception as exc:
                 last_error = exc

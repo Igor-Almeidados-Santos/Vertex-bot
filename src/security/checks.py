@@ -110,7 +110,14 @@ class SecurityChecks:
                 return None
 
             raw_bytes = base64.b64decode(data_list[0])
-            if len(raw_bytes) >= 496:
+            # Raydium AMM v4 (tamanho 752 bytes) -> lp_mint em offset 464..496
+            if len(raw_bytes) == 752:
+                return str(Pubkey.from_bytes(raw_bytes[464:496]))
+            # Raydium CPMM (tamanho 637 bytes) -> lp_mint em offset 200..232
+            elif len(raw_bytes) == 637:
+                return str(Pubkey.from_bytes(raw_bytes[200:232]))
+            elif len(raw_bytes) > 752:
+                # Layouts estendidos de AMM v4
                 return str(Pubkey.from_bytes(raw_bytes[464:496]))
         except Exception as exc:
             logger.debug("Falha ao extrair lpMint de %s: %s", pool_address, exc)
@@ -172,13 +179,17 @@ class SecurityChecks:
         if mock_burn_pct is not None:
             return (mock_burn_pct >= 98.0, mock_burn_pct)
 
-        is_pump = dex.lower() == "pumpfun" or token_address.lower().endswith("pump")
-        if is_pump and not pool_address:
-            logger.info("Token %s opera na curva do Pump.fun (liquidez travada no contrato).", token_address)
+        dex_clean = (dex or "").lower()
+        is_pump = (
+            dex_clean in ("pumpfun", "pump", "pumpswap")
+            or token_address.lower().endswith("pump")
+        )
+        if is_pump:
+            logger.info("Token %s opera em Pump.fun/PumpSwap (liquidez travada no contrato).", token_address)
             return (True, 100.0)
 
         if not pool_address or not rpc_client:
-            return (True, 100.0) if is_pump else (False, 0.0)
+            return (False, 0.0)
 
         try:
             lp_mint = await SecurityChecks._extract_lp_mint_from_pool(pool_address, rpc_client)
@@ -242,22 +253,53 @@ class SecurityChecks:
                 "11111111111111111111111111111111",
                 "Dead1111111111111111111111111111111",
                 "1nc1nerator11111111111111111111111111111111",
+                "Incinerator11111111111111111111111111111111",
             }
             DEX_AUTHORITIES = {
+                # Raydium AMM v4
                 "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",  # Raydium AMM v4 Authority
                 "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",  # Raydium AMM v4 Program
+                # Raydium CPMM
+                "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL",  # Raydium CPMM Vault Authority PDA
                 "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",  # Raydium CPMM Program
                 "Db6t5kKhpvWcKezU28JyVyYBogP8xe1updW1gk4EBTo",  # Raydium CPMM Authority
+                # Raydium CLMM
                 "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",  # Raydium CLMM Program
+                "EEi8wVCcmdA2Ma5cfnnAQvCA8HTUSytHw4gTjPPQA9VM",  # Raydium CLMM Vault Authority
+                "GKck6yv5V3Ms5iEiT7rFjRnQ81MNnVsr7wvqHUwyk4xG",  # Raydium CLMM Pool Vault
+                # Pump.fun & PumpSwap
                 "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",  # Pump.fun Program
                 "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",  # Pump.fun Migration
                 "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM",  # Pump.fun Fee
-                "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",  # Meteora DLMM
-                "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",  # Meteora Dynamic
-                "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  # Orca Whirlpool
+                "BSfD6SHZigAfDWSzqKUnoqWQK9KXgByEodnUxaCQdmQc",  # PumpSwap
+                # Meteora
+                "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",  # Meteora DLMM Program
+                "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",  # Meteora Dynamic AMM Program
+                "24Uqj9JCLxUeoC3hGfh5W3s9FM9uCHDS2SG3LYwBpyTi",  # Meteora Vault Program
+                # Orca
+                "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  # Orca Whirlpool Program
             }
 
             is_pump = dex.lower() in ("pumpfun", "pump") or token_address.lower().endswith("pump")
+
+            # Mapeia cofres conhecidos diretamente a partir da conta do pool (se informada)
+            known_pool_vaults: set[str] = set()
+            if pool_address and rpc_client:
+                try:
+                    p_info = await rpc_client.call("getAccountInfo", [pool_address, {"encoding": "base64"}])
+                    p_val = p_info.get("result", {}).get("value")
+                    if isinstance(p_val, dict):
+                        p_data = p_val.get("data", [])
+                        if isinstance(p_data, list) and p_data:
+                            p_bytes = base64.b64decode(p_data[0])
+                            if len(p_bytes) == 752:  # Raydium AMM v4
+                                known_pool_vaults.add(str(Pubkey.from_bytes(p_bytes[320:352])))
+                                known_pool_vaults.add(str(Pubkey.from_bytes(p_bytes[352:384])))
+                            elif len(p_bytes) == 637:  # Raydium CPMM
+                                known_pool_vaults.add(str(Pubkey.from_bytes(p_bytes[72:104])))
+                                known_pool_vaults.add(str(Pubkey.from_bytes(p_bytes[104:136])))
+                except Exception as p_err:
+                    logger.debug("Falha ao resolver cofres do pool %s: %s", pool_address, p_err)
 
             # Mapeia proprietários das maiores contas via getMultipleAccounts
             account_owners: dict[str, str] = {}
@@ -283,6 +325,28 @@ class SecurityChecks:
                 except Exception as owner_err:
                     logger.debug("Falha transitória em getMultipleAccounts: %s", owner_err)
 
+            # Resolução em segundo nível: verifica se os proprietários das contas pertencem a programas DEX
+            program_owners: dict[str, str] = {}
+            unique_owners = [
+                o for o in set(account_owners.values())
+                if o and o not in DEX_AUTHORITIES and o not in BURN_WALLETS
+            ]
+            if unique_owners:
+                try:
+                    owner_accs_info = await rpc_client.call(
+                        "getMultipleAccounts",
+                        [unique_owners, {"encoding": "base64"}],
+                    )
+                    owner_vals = owner_accs_info.get("result", {}).get("value", [])
+                    if isinstance(owner_vals, list):
+                        for idx, ov in enumerate(owner_vals):
+                            if idx < len(unique_owners) and isinstance(ov, dict):
+                                prog_id = ov.get("owner")
+                                if prog_id:
+                                    program_owners[unique_owners[idx]] = str(prog_id)
+                except Exception as prog_err:
+                    logger.debug("Falha ao resolver programas proprietários das contas: %s", prog_err)
+
             private_accounts: list[float] = []
             burned_amount = 0.0
             pool_vault_amount = 0.0
@@ -305,9 +369,11 @@ class SecurityChecks:
                     burned_amount += amount
                     continue
 
-                # 2. Checagem de cofre da DEX / bonding curve
+                # 2. Checagem de cofre da DEX / bonding curve (3 camadas)
                 is_pool = (
-                    owner in DEX_AUTHORITIES
+                    acc_addr in known_pool_vaults
+                    or owner in DEX_AUTHORITIES
+                    or program_owners.get(owner, "") in DEX_AUTHORITIES
                     or (pool_address is not None and (acc_addr == pool_address or owner == pool_address))
                 )
 
