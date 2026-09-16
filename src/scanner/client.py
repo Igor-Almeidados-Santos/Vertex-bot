@@ -257,6 +257,7 @@ class ResilientRPCClient:
                             )
                 else:
                     is_forbidden = "403" in err_str or "require a personal token" in err_str
+                    is_server_error = any(e in err_str for e in ("500", "502", "503", "504", "internal server error", "timeout"))
                     if is_forbidden and "publicnode" in target_url:
                         self._cooldowns[target_url] = time.monotonic() + 300.0  # 5 min cooldown no publicnode
                     logger.warning(
@@ -266,6 +267,13 @@ class ResilientRPCClient:
                         target_url,
                         exc,
                     )
+                    if is_server_error and is_dedicated and attempt < self.max_retries:
+                        # Erro interno transitório da Helius: não rotacionar para nós públicos. Aguardar e tentar de novo.
+                        backoff = 1.0 * attempt + random.uniform(0.1, 0.5)
+                        logger.warning("Aguardando %.2fs para retentar nó dedicado após erro do servidor...", backoff)
+                        await asyncio.sleep(backoff)
+                        continue
+
                 self._rotate_endpoint()
 
                 if attempt == self.max_retries:
