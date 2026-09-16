@@ -772,7 +772,10 @@ class VertexBotOrchestrator:
         """Inicia todas as tarefas cooperativas do bot."""
         self.is_running = True
         self.run_mock_stream = run_mock_stream
-        logger.info("=== VERTEX-BOT OPERACIONAL ===")
+        rpc_display = self.settings.PRIMARY_RPC_HTTP_URL.split("?")[0]
+        has_key = "api-key" in self.settings.PRIMARY_RPC_HTTP_URL or bool(self.settings.HELIUS_API_KEY)
+        key_info = "🔑 Helius RPC dedicada configurada" if "helius" in rpc_display and has_key else f"Nó: {rpc_display}"
+        logger.info("=== VERTEX-BOT OPERACIONAL | %s ===", key_info)
 
         # Tarefa 1: Processador da fila de auditoria de segurança
         self._tasks.append(asyncio.create_task(self._security_worker()))
