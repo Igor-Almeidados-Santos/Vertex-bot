@@ -86,6 +86,9 @@ class ResilientRPCClient:
         self._current_url: str = self.endpoints[0]
         self._cooldowns: dict[str, float] = {}
         self._warned_about_helius: bool = False
+        self._min_interval_sec: float = 0.12  # ~8 req/s (respeita o teto de 10 RPS da Helius Free Tier)
+        self._last_call_time: float = 0.0
+        self._rate_lock: asyncio.Lock | None = None
 
     def _is_cooling_down(self, url: str) -> bool:
         """Verifica se um nó RPC está em período de resfriamento (cooldown)."""
@@ -138,10 +141,13 @@ class ResilientRPCClient:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
                 if resp.status != 200:
                     raise RPCConnectionError(f"HTTP {resp.status} retornado pelo nó RPC {url}")
-                data = resp.read()
-                return cast(dict[str, Any], json.loads(data.decode("utf-8")))
-        except urllib.error.HTTPError as err:
-            raise RPCConnectionError(f"HTTP {err.code} retornado pelo nó RPC {url}: {err.reason}") from err
+                data = json.loads(resp.read().decode("utf-8"))
+                return cast(dict[str, Any], data)
+        except urllib.error.HTTPError as http_err:
+            body = http_err.read().decode("utf-8", errors="ignore")[:200]
+            raise RPCConnectionError(f"HTTP {http_err.code} de {url}: {body}") from http_err
+        except Exception as exc:
+            raise RPCConnectionError(f"Falha na requisição RPC síncrona para {url}: {exc}") from exc
 
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Envia requisição JSON usando aiohttp se disponível ou fallback."""
@@ -159,7 +165,18 @@ class ResilientRPCClient:
             return await asyncio.to_thread(self._sync_post, url, payload_bytes)
 
     async def call(self, method: str, params: list[Any]) -> dict[str, Any]:
-        """Realiza chamada JSON-RPC com retries, cooldown de 429 e failover automático entre nós."""
+        """Realiza chamada JSON-RPC com controle de vazão (rate limiter), retries e failover."""
+        if self._rate_lock is None:
+            self._rate_lock = asyncio.Lock()
+
+        # Controle de vazão global para evitar picos que excedam 10 req/s da Helius Free Tier
+        async with self._rate_lock:
+            now = time.monotonic()
+            elapsed = now - self._last_call_time
+            if elapsed < self._min_interval_sec:
+                await asyncio.sleep(self._min_interval_sec - elapsed)
+            self._last_call_time = time.monotonic()
+
         payload = {
             "jsonrpc": "2.0",
             "id": self._get_next_id(),
@@ -207,22 +224,41 @@ class ResilientRPCClient:
                     or "too many requests" in err_str
                     or "-32005" in err_str
                 )
+                is_dedicated = "helius" in target_url or "api-key" in target_url
                 if is_rate_limit:
-                    self._cooldowns[target_url] = time.monotonic() + 60.0
-                    logger.warning(
-                        "Falha na tentativa %d/%d com nó RPC %s: Rate-limit (429) detectado. Nó em resfriamento por 60s. (%s)",
-                        attempt,
-                        self.max_retries,
-                        target_url,
-                        exc,
-                    )
-                    if "api.mainnet-beta.solana.com" in target_url and not self._warned_about_helius:
-                        self._warned_about_helius = True
-                        logger.info(
-                            "💡 DICA: O nó público padrão da Solana bloqueia provedores de nuvem/VPS. "
-                            "Configure HELIUS_API_KEY no arquivo .env para conexão RPC privada com alta performance."
+                    if is_dedicated:
+                        # Em nó dedicado, o 429 é apenas um pico transitório de RPS.
+                        # Não joga fora o nó dedicado nem comuta para nós públicos que bloqueiam indexação.
+                        backoff = 0.8 * attempt + random.uniform(0.1, 0.3)
+                        logger.warning(
+                            "Falha na tentativa %d/%d com nó dedicado %s: Rate-limit transitório. Aguardando %.2fs para retentar...",
+                            attempt,
+                            self.max_retries,
+                            target_url.split("?")[0],
+                            backoff,
                         )
+                        if attempt < self.max_retries:
+                            await asyncio.sleep(backoff)
+                            continue
+                    else:
+                        self._cooldowns[target_url] = time.monotonic() + 60.0
+                        logger.warning(
+                            "Falha na tentativa %d/%d com nó RPC %s: Rate-limit (429) detectado. Nó em resfriamento por 60s. (%s)",
+                            attempt,
+                            self.max_retries,
+                            target_url,
+                            exc,
+                        )
+                        if "api.mainnet-beta.solana.com" in target_url and not self._warned_about_helius:
+                            self._warned_about_helius = True
+                            logger.info(
+                                "💡 DICA: O nó público padrão da Solana bloqueia provedores de nuvem/VPS. "
+                                "Configure HELIUS_API_KEY no arquivo .env para conexão RPC privada com alta performance."
+                            )
                 else:
+                    is_forbidden = "403" in err_str or "require a personal token" in err_str
+                    if is_forbidden and "publicnode" in target_url:
+                        self._cooldowns[target_url] = time.monotonic() + 300.0  # 5 min cooldown no publicnode
                     logger.warning(
                         "Falha na tentativa %d/%d com nó RPC %s: %s",
                         attempt,

@@ -837,6 +837,7 @@ class VertexBotOrchestrator:
                     self.telemetry.record_rejection(audit.rejection_reason or "Desconhecido")
 
                 self.detection_queue.task_done()
+                await asyncio.sleep(0.15)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
