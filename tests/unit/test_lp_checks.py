@@ -17,24 +17,24 @@ from src.security.checks import SecurityChecks
 
 
 @pytest.mark.asyncio
-async def test_lp_pumpfun_bonding_curve_approved() -> None:
-    """Tokens em curva de bonding do Pump.fun têm liquidez bloqueada no contrato."""
+async def test_lp_pumpfun_bonding_curve_rejected() -> None:
+    """Tokens em curva de bonding do Pump.fun sem graduação para AMM são reprovados."""
     is_safe, burn_pct = await SecurityChecks.check_lp_status(
         pool_address=None,
         token_address="8R9WxZRuXocQDij1VMvLHahzFVxH9quKiUvLT7yqpump",
         dex="pumpfun",
     )
-    assert is_safe is True
-    assert burn_pct == 100.0
+    assert is_safe is False
+    assert burn_pct == 0.0
 
 
 @pytest.mark.asyncio
-async def test_lp_pumpfun_by_suffix_approved() -> None:
-    """Tokens terminando em 'pump' sem pool são reconhecidos como bonding curve."""
+async def test_lp_pumpswap_amm_approved() -> None:
+    """Tokens graduados no AMM PumpSwap têm liquidez bloqueada nativamente no contrato."""
     is_safe, burn_pct = await SecurityChecks.check_lp_status(
         pool_address=None,
         token_address="CeEitaSeF2dUsPmiR44Arp6GRq3TsGNNKKCyFBZ2pump",
-        dex="raydium",  # Dex pode ter vindo errada no feed inicial
+        dex="pumpswap",
     )
     assert is_safe is True
     assert burn_pct == 100.0

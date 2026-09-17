@@ -180,13 +180,16 @@ class SecurityChecks:
             return (mock_burn_pct >= 98.0, mock_burn_pct)
 
         dex_clean = (dex or "").lower()
-        is_pump = (
-            dex_clean in ("pumpfun", "pump", "pumpswap")
-            or token_address.lower().endswith("pump")
-        )
-        if is_pump:
-            logger.info("Token %s opera em Pump.fun/PumpSwap (liquidez travada no contrato).", token_address)
+        if dex_clean in ("pumpswap",):
+            logger.info("Token %s opera em PumpSwap (liquidez travada no contrato AMM).", token_address)
             return (True, 100.0)
+
+        if dex_clean in ("pumpfun", "pump"):
+            logger.warning(
+                "Token %s opera em bonding curve Pump.fun sem graduação para pool AMM (LP não bloqueada).",
+                token_address,
+            )
+            return (False, 0.0)
 
         if not pool_address or not rpc_client:
             return (False, 0.0)
@@ -194,7 +197,7 @@ class SecurityChecks:
         try:
             lp_mint = await SecurityChecks._extract_lp_mint_from_pool(pool_address, rpc_client)
             if not lp_mint:
-                return (True, 100.0) if is_pump else (False, 0.0)
+                return (False, 0.0)
 
             supply_res = await rpc_client.call("getTokenSupply", [lp_mint])
             total_supply = float(supply_res.get("result", {}).get("value", {}).get("uiAmount", 0.0))
@@ -214,7 +217,7 @@ class SecurityChecks:
             raise
         except Exception as exc:
             logger.warning("Falha ao checar LP de pool %s: %s", pool_address, exc)
-            return (True, 100.0) if is_pump else (False, 0.0)
+            return (False, 0.0)
 
     @staticmethod
     async def check_top10_concentration(

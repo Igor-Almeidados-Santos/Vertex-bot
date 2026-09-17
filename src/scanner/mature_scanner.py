@@ -406,10 +406,13 @@ class MatureTokenScanner:
                             and token_addr not in seen_in_batch
                             and self._is_candidate_needed(token_addr)
                         ):
+                            raw_dex = str(p.get("dexId", "")).lower()
+                            if raw_dex in ("pumpfun", "pump"):
+                                continue
                             raw_liq = p.get("liquidity")
                             liq_dict = raw_liq if isinstance(raw_liq, dict) else {}
                             liq_usd = float(liq_dict.get("usd") or 0.0)
-                            if liq_usd > 0.0 and (liq_usd < float(self.min_liquidity_usd) or liq_usd > float(self.max_liquidity_usd)):
+                            if liq_usd < float(self.min_liquidity_usd) or liq_usd > float(self.max_liquidity_usd):
                                 continue
                             seen_in_batch.add(token_addr)
                             found_candidates.append((token_addr, {"pair_data": p}))
@@ -596,7 +599,7 @@ class MatureTokenScanner:
         """Extrai dex, pool_address, liquidez em USD, symbol, name e price_usd dos metadados."""
         dex = "raydium"
         pool_address = hint.get("pool_address")
-        liquidity_usd = Decimal("5000.0")
+        liquidity_usd = Decimal("0.0")
         symbol: str | None = None
         name: str | None = None
 
@@ -605,8 +608,8 @@ class MatureTokenScanner:
             dex = str(pair_data.get("dexId", "raydium")).lower()
             pool_address = pair_data.get("pairAddress") or pool_address
             liq_dict = pair_data.get("liquidity", {})
-            if isinstance(liq_dict, dict) and "usd" in liq_dict:
-                liquidity_usd = Decimal(str(liq_dict.get("usd") or 5000.0))
+            if isinstance(liq_dict, dict) and "usd" in liq_dict and liq_dict.get("usd") is not None:
+                liquidity_usd = Decimal(str(liq_dict.get("usd") or 0.0))
             symbol = pair_data.get("baseToken", {}).get("symbol")
             name = pair_data.get("baseToken", {}).get("name")
             if pair_data.get("priceUsd"):
@@ -617,7 +620,7 @@ class MatureTokenScanner:
             try:
                 liquidity_usd = Decimal(str(hint["reserve_usd"]))
             except Exception:
-                liquidity_usd = Decimal("5000.0")
+                liquidity_usd = Decimal("0.0")
             if hint.get("base_token_price_usd"):
                 price_usd = str(hint["base_token_price_usd"])
             elif hint.get("price_usd"):
@@ -665,6 +668,14 @@ class MatureTokenScanner:
             return None, True
 
         dex, pool_address, liquidity_usd, symbol, name, price_usd = self._extract_pool_data(pair_data, hint)
+
+        # Descarta bonding curves do Pump.fun que nunca graduaram para pool AMM
+        if dex in ("pumpfun", "pump"):
+            logger.debug(
+                "Token %s descartado: bonding curve Pump.fun sem graduação para DEX AMM.",
+                token_address,
+            )
+            return None, True
 
         # Pré-filtro anti-impersonation: descarta clones falsos de SOL, USDC e USDT
         OFFICIAL_CONTRACTS = {

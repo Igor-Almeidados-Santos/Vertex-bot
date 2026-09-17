@@ -144,6 +144,8 @@ class VertexBotOrchestrator:
         self._tasks: list[asyncio.Task[None]] = []
         self.stop_event: asyncio.Event | None = None
         self._last_handled_ipc_id: str | None = None
+        self._entry_lock: asyncio.Lock | None = None
+        self._waiting_queue_lock: asyncio.Lock | None = None
 
         # Fila de Espera de Tokens Aprovados (Aguardando Vaga ou Saldo)
         self.waiting_tokens: dict[str, dict[str, Any]] = {}
@@ -1049,52 +1051,96 @@ class VertexBotOrchestrator:
 
     async def _try_fill_slots_from_waiting_queue(self) -> None:
         """Processa a fila de espera de tokens aprovados e abre posições se houver vagas e saldo."""
-        can_run, _, min_required, max_positions = self._can_process_waiting_queue()
-        if not can_run:
+        if self._waiting_queue_lock is None:
+            self._waiting_queue_lock = asyncio.Lock()
+
+        if self._waiting_queue_lock.locked():
             return
 
-        strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
-        if strat_mode == "SWING_ONLY":
-            max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0))
-        elif strat_mode == "SCALP_ONLY":
-            max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
-        else:
-            max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
-        now_utc = datetime.now(UTC)
+        async with self._waiting_queue_lock:
+            can_run, _, min_required, max_positions = self._can_process_waiting_queue()
+            if not can_run:
+                return
 
-        candidates = list(self.waiting_tokens.values())
-        addrs = [c["address"] for c in candidates]
-        live_prices = await self.price_feed.fetch_prices(addrs)
+            strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+            if strat_mode == "SWING_ONLY":
+                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0))
+            elif strat_mode == "SCALP_ONLY":
+                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+            else:
+                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+            now_utc = datetime.now(UTC)
 
-        for item in candidates:
-            if not self.is_running or self.is_paused:
-                break
-            if len(self.position_tracker.active_positions) >= max_positions:
-                break
-            if self.execution_engine.balance_usd < min_required:
-                break
+            candidates = list(self.waiting_tokens.values())
+            addrs = [c["address"] for c in candidates]
+            live_prices = await self.price_feed.fetch_prices(addrs)
 
-            addr = item["address"]
-            if self._is_waiting_token_expired(item, max_age_hours, now_utc):
-                self.waiting_tokens.pop(addr, None)
-                self._save_waiting_tokens()
-                continue
+            for item in candidates:
+                if not self.is_running or self.is_paused:
+                    break
+                if len(self.position_tracker.active_positions) >= max_positions:
+                    break
+                if self.execution_engine.balance_usd < min_required:
+                    break
 
-            price = live_prices.get(addr)
-            if self._is_waiting_token_dumped(item, price):
-                self.waiting_tokens.pop(addr, None)
-                self._save_waiting_tokens()
-                continue
+                addr = item["address"]
+                if self._is_waiting_token_expired(item, max_age_hours, now_utc):
+                    self.waiting_tokens.pop(addr, None)
+                    self._save_waiting_tokens()
+                    continue
 
-            token_meta = self._build_waiting_token_meta(item, price)
-            await self._evaluate_and_execute_entry(token_meta)
+                price = live_prices.get(addr)
+                if self._is_waiting_token_dumped(item, price):
+                    self.waiting_tokens.pop(addr, None)
+                    self._save_waiting_tokens()
+                    continue
+
+                token_meta = self._build_waiting_token_meta(item, price)
+                await self._evaluate_and_execute_entry(token_meta)
 
     async def _evaluate_and_execute_entry(self, token: TokenMetadata) -> None:
         """Avalia limites de slots, saldo e executa a compra do token aprovado com parâmetros dinâmicos."""
+        if self._entry_lock is None:
+            self._entry_lock = asyncio.Lock()
+
+        async with self._entry_lock:
+            await self._locked_evaluate_and_execute_entry(token)
+
+    async def _locked_evaluate_and_execute_entry(self, token: TokenMetadata) -> None:
+        """Execução sincronizada com lock de entrada para prevenir posições duplicadas e validar mercado."""
         # 0. Sincroniza configurações mais recentes do disco para garantir conformidade com ajustes
         self._sync_config_from_disk_if_present()
 
-        # 1. Validação estrita de idade do token no mercado (Scalp: 30m-720h, Swing: 2h-4h)
+        strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+
+        # Verificação atômica de posições já abertas para o token
+        active_positions = list(self.position_tracker.active_positions.values())
+        existing_addrs = {p.token_address for p in active_positions}
+        if token.address in existing_addrs:
+            logger.info(
+                "⏸️ [POSIÇÃO JÁ ABERTA] O token %s (%s) já possui posição ativa. Ignorando entrada duplicada.",
+                token.symbol or "N/A",
+                token.address,
+            )
+            if token.address in self.waiting_tokens:
+                self.waiting_tokens.pop(token.address, None)
+                self._save_waiting_tokens()
+            return
+
+        # Validação obrigatória de dinâmica de mercado se pair_data estiver presente
+        if hasattr(self, "market_validator") and isinstance(token.raw_event, dict) and "pair_data" in token.raw_event:
+            is_market_safe, market_reason, _ = self.market_validator.evaluate(token, strategy_mode=strat_mode)
+            if not is_market_safe:
+                logger.warning(
+                    "⚠️ [MERCADO DESFAVORÁVEL] Token %s reprovado na validação de mercado: %s. Descartando entrada.",
+                    token.symbol or token.address[:8],
+                    market_reason,
+                )
+                if token.address in self.waiting_tokens:
+                    self.waiting_tokens.pop(token.address, None)
+                    self._save_waiting_tokens()
+                return
+
         # 1. Validação estrita de idade do token no mercado (Scalp: 2h-720h, Swing: 3h-6h)
         strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
         if strat_mode == "SWING_ONLY":
@@ -1345,12 +1391,18 @@ class VertexBotOrchestrator:
             exit_reason=exit_reason,
         )
 
-        # 2. Libera token nos caches de vistos dos scanners para permitir nova detecção
-        if hasattr(self.scanner, "release_token"):
-            try:
-                self.scanner.release_token(position.token_address)
-            except Exception as exc:
-                logger.debug("Erro ao chamar release_token no scanner: %s", exc)
+        # 2. Libera token nos caches de vistos dos scanners APENAS se tiver sido trade lucrativo com break-even
+        if position.break_even_triggered and position.realized_pnl_usd > Decimal("0.0"):
+            if hasattr(self.scanner, "release_token"):
+                try:
+                    self.scanner.release_token(position.token_address)
+                except Exception as exc:
+                    logger.debug("Erro ao chamar release_token no scanner: %s", exc)
+        else:
+            logger.info(
+                "🛑 [ANTI-LOOP RECOMPRA] Token %s finalizou sem lucro expressivo. Mantido no cache de vistos para impedir recompras cíclicas.",
+                position.token_address,
+            )
 
         # 3. Dispara verificação imediata da fila de espera para preencher o slot recém-liberado
         try:
@@ -1495,7 +1547,7 @@ class VertexBotOrchestrator:
 
         # Validação de dinâmica de mercado (momentum e fluxo)
         strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
-        if hasattr(self, "market_validator"):
+        if hasattr(self, "market_validator") and isinstance(cand.raw_event, dict) and "pair_data" in cand.raw_event:
             is_market_ok, reject_reason, _ = self.market_validator.evaluate(cand, strategy_mode=strat_mode)
             if not is_market_ok:
                 logger.debug(

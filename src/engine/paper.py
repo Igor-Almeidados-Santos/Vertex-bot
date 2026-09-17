@@ -82,7 +82,7 @@ class PaperExecutionEngine(IExecutionEngine):
                     except Exception:
                         pass
 
-        # 3. Fallback defensivo caso nenhuma cotação seja encontrada
+        # 3. Fallback defensivo (útil para testes unitários e mocks sintéticos sem feed)
         return Decimal("0.001")
 
     async def execute_buy(

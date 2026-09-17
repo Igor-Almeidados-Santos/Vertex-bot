@@ -268,6 +268,13 @@ class MarketDynamicsValidator:
         # =========================================================================
         # GATES AVANÇADOS COM DADOS DE PAR (DEXSCREENER)
         # =========================================================================
+        if not has_pair:
+            reason = (
+                "Dados de mercado e volume não localizados na DEX "
+                "(Token sem pool AMM verificada ou não indexado com liquidez no DexScreener)"
+            )
+            return False, reason, metrics
+
         if has_pair:
             # GATE D: LIQUIDEZ REAL DA MOEDA DE COTAÇÃO (QUOTE TOKEN)
             if quote_symbol in ("USDC", "USDT") and 0.0 < pooled_quote < self.min_liquidity_scalp_usd:
