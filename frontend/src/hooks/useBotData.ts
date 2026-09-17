@@ -109,6 +109,26 @@ export function useBotData() {
                 ...prev.slice(0, 250),
               ]);
             }
+            if (data.type === "position_tick" && data.data) {
+              const tick = data.data;
+              setPositions((prev) =>
+                prev.map((pos) => {
+                  if (pos.id === tick.id || (!pos.id && pos.token_address === tick.token_address)) {
+                    return {
+                      ...pos,
+                      current_price: tick.current_price ?? pos.current_price,
+                      highest_price_seen: tick.highest_price_seen ?? pos.highest_price_seen,
+                      trailing_stop_price: tick.trailing_stop_price ?? pos.trailing_stop_price,
+                      unrealized_pnl_usd: tick.unrealized_pnl_usd ?? pos.unrealized_pnl_usd,
+                      unrealized_pnl_pct: tick.unrealized_pnl_pct ?? pos.unrealized_pnl_pct,
+                      ratchet_floor_price: tick.ratchet_floor_price ?? pos.ratchet_floor_price,
+                      active_tier: tick.active_tier ?? pos.active_tier,
+                    };
+                  }
+                  return pos;
+                })
+              );
+            }
             if (data.type === "trade" || data.type === "status_change") {
               refreshData();
             }

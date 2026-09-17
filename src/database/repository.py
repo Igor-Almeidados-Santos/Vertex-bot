@@ -455,6 +455,37 @@ class PositionsRepository:
             positions.append(pos)
         return positions
 
+    async def get_by_id(self, position_id: int) -> PositionState | None:
+        """Carrega uma posição específica pelo seu ID."""
+        query = "SELECT * FROM posicoes WHERE id = ?"
+        row = await self.db.fetchone(query, (position_id,))
+        if not row:
+            return None
+        pos_dict = dict(row)
+        return PositionState(
+            id=pos_dict["id"],
+            token_address=pos_dict["token_address"],
+            status=PositionStatus(pos_dict["status"]),
+            mode=ExecutionMode(pos_dict["mode"]),
+            strategy_type=pos_dict.get("strategy_type") or "SCALP",
+            entry_price=Decimal(str(pos_dict["entry_price"])),
+            initial_token_amount=Decimal(str(pos_dict["initial_token_amount"])),
+            remaining_token_amount=Decimal(str(pos_dict["remaining_token_amount"])),
+            allocated_capital_usd=Decimal(str(pos_dict["allocated_capital_usd"])),
+            realized_pnl_usd=Decimal(str(pos_dict["realized_pnl_usd"])),
+            highest_price_seen=Decimal(str(pos_dict["highest_price_seen"])),
+            break_even_triggered=bool(pos_dict["break_even_triggered"]),
+            trailing_stop_price=Decimal(str(pos_dict["trailing_stop_price"])),
+            ratchet_tier=int(pos_dict.get("ratchet_tier") or 0),
+            ratchet_floor_price=Decimal(str(pos_dict.get("ratchet_floor_price") or "0.0")),
+            opened_at=datetime.fromisoformat(pos_dict["opened_at"]),
+            closed_at=(
+                datetime.fromisoformat(pos_dict["closed_at"])
+                if pos_dict.get("closed_at")
+                else None
+            ),
+        )
+
     async def get_all_positions(
         self,
         limit: int = 100,

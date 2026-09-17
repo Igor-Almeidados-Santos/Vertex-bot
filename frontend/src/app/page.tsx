@@ -222,7 +222,7 @@ export default function DashboardPage() {
 
               {/* Renderizador das Sub-Abas */}
               <div>
-                {simSubTab === "OPEN_POSITIONS" && <ActivePositionsTab positions={positions} />}
+                {simSubTab === "OPEN_POSITIONS" && <ActivePositionsTab positions={positions} onRefresh={refreshData} />}
                 {simSubTab === "CLOSED_POSITIONS" && <ClosedPositionsTab positions={positions} />}
                 {simSubTab === "WAITING_QUEUE" && <WaitingQueueTab waitingTokens={waitingTokens} />}
                 {simSubTab === "ORDERS" && <OrdersTab orders={recentOrders} />}

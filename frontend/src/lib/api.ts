@@ -104,3 +104,16 @@ export async function depositCash(amountUsd: number): Promise<{ wallet_balance_u
   });
 }
 
+export async function closePosition(positionId: number): Promise<{ status: string; message: string; position_id: number }> {
+  return fetchJson<{ status: string; message: string; position_id: number }>(`/api/positions/${positionId}/close`, {
+    method: "POST",
+  });
+}
+
+export async function buyMorePosition(positionId: number): Promise<{ status: string; message: string; position_id: number }> {
+  return fetchJson<{ status: string; message: string; position_id: number }>(`/api/positions/${positionId}/buy_more`, {
+    method: "POST",
+  });
+}
+
+

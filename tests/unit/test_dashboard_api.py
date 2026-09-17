@@ -342,3 +342,68 @@ async def test_bot_status_handles_null_config_values(tmp_path: Path, monkeypatch
         await db.close()
 
 
+@pytest.mark.asyncio
+async def test_dashboard_position_close_and_buy_more(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Testa os endpoints POST /api/positions/{id}/close e POST /api/positions/{id}/buy_more."""
+    db_path = str(tmp_path / "test_actions.db")
+    db = DatabaseManager(db_path)
+    await db.initialize()
+
+    tokens_repo = TokensRepository(db)
+    token = TokenMetadata(
+        address="POS_ACTION_TOKEN",
+        symbol="ACT",
+        name="Action Token",
+        dex="raydium",
+    )
+    await tokens_repo.save_detected_token(token)
+
+    positions_repo = PositionsRepository(db)
+    pos = PositionState(
+        token_address="POS_ACTION_TOKEN",
+        mode=ExecutionMode.PAPER,
+        strategy_type="SCALP",
+        entry_price=Decimal("0.000005"),
+        initial_token_amount=Decimal("200000.0"),
+        allocated_capital_usd=Decimal("1.0"),
+        highest_price_seen=Decimal("0.000005"),
+        trailing_stop_price=Decimal("0.0000044"),
+        status=PositionStatus.OPEN,
+    )
+    pos_id = await positions_repo.create_position(pos)
+
+    # Teste em modo desacoplado (IPC write)
+    control_path = tmp_path / "bot_control.json"
+    monkeypatch.setattr(srv_mod, "CONTROL_FILE", control_path)
+
+    app = create_dashboard_app(db, orchestrator=None)
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+
+    try:
+        # Fechar posição
+        resp_close = await client.post(f"/api/positions/{pos_id}/close")
+        assert resp_close.status == 200
+        data_close = await resp_close.json()
+        assert data_close["status"] == "success"
+        assert control_path.exists()
+        ipc_data = json.loads(control_path.read_text(encoding="utf-8"))
+        assert ipc_data["command"] == "close_position"
+        assert ipc_data["payload"]["position_id"] == pos_id
+
+        # Comprar mais / nova posição
+        resp_buy = await client.post(f"/api/positions/{pos_id}/buy_more")
+        assert resp_buy.status == 200
+        data_buy = await resp_buy.json()
+        assert data_buy["status"] == "success"
+        ipc_data_buy = json.loads(control_path.read_text(encoding="utf-8"))
+        assert ipc_data_buy["command"] == "buy_more"
+        assert ipc_data_buy["payload"]["position_id"] == pos_id
+    finally:
+        await client.close()
+        await server.close()
+        await db.close()
+
+
+

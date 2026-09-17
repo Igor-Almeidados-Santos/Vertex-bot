@@ -199,3 +199,75 @@ class PositionTracker:
                     await self.on_position_closed(position)
                 except Exception as cb_err:
                     logger.warning("Erro ao executar callback on_position_closed para %s: %s", position.token_address, cb_err)
+
+    async def close_position_manually(self, position_id: int) -> bool:
+        """Encerra manualmente uma posição ativa a mercado a pedido do usuário."""
+        position = self.active_positions.get(position_id)
+        if not position:
+            db_pos = await self.positions_repo.get_by_id(position_id)
+            if not db_pos or db_pos.status in (PositionStatus.CLOSED, PositionStatus.STOPPED):
+                logger.warning("Tentativa de fechar manualmente posição #%d que não está aberta.", position_id)
+                return False
+            position = db_pos
+
+        current_price = (
+            position.current_price
+            if position.current_price is not None and position.current_price > Decimal("0.0")
+            else (
+                position.highest_price_seen
+                if position.highest_price_seen > Decimal("0.0")
+                else position.entry_price
+            )
+        )
+        tokens_to_sell = position.remaining_token_amount
+        if tokens_to_sell <= Decimal("0.0"):
+            logger.warning("Posição #%d possui saldo restante de tokens zerado.", position_id)
+            return False
+
+        logger.info(
+            "🛑 [ENCERRAMENTO MANUAL] Posição #%d (%s) | Cotação: $%.8f | Liquidando 100%% dos tokens remanescentes (%s)...",
+            position_id,
+            position.token_address,
+            current_price,
+            tokens_to_sell,
+        )
+
+        # 1. Executa venda a mercado
+        await self.engine.execute_sell(
+            position,
+            tokens_to_sell,
+            reason="MANUAL_CLOSE",
+            execution_price=current_price,
+        )
+
+        # 2. Atualiza estado em memória
+        position.close_position(current_price, reason="MANUAL_CLOSE")
+
+        # 3. Persiste no SQLite
+        await self.positions_repo.close_position(
+            position_id,
+            position.realized_pnl_usd,
+            status=PositionStatus.CLOSED,
+        )
+
+        # 4. Remove das posições ativas
+        self.active_positions.pop(position_id, None)
+        logger.info(
+            "Posição ID #%d encerrada manualmente com sucesso | PnL Realizado: $%.2f.",
+            position_id,
+            position.realized_pnl_usd,
+        )
+
+        # 5. Notifica encerramento para liberar token para monitoramento
+        if self.on_position_closed is not None:
+            try:
+                await self.on_position_closed(position)
+            except Exception as cb_err:
+                logger.warning(
+                    "Erro ao executar callback on_position_closed para %s: %s",
+                    position.token_address,
+                    cb_err,
+                )
+
+        return True
+

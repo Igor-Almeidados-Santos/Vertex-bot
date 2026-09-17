@@ -768,6 +768,62 @@ class DashboardServer:
             logger.error("Erro ao realizar depósito: %s", exc)
             return web.json_response({"status": "error", "message": str(exc)}, status=400)
 
+    async def handle_position_close(self, request: web.Request) -> web.Response:
+        """Encerra e vende manualmente uma posição ativa a mercado."""
+        try:
+            raw_id = request.match_info.get("id")
+            if not raw_id or not raw_id.isdigit():
+                return web.json_response({"status": "error", "message": "ID de posição inválido."}, status=400)
+            position_id = int(raw_id)
+
+            if self.orchestrator:
+                success = await self.orchestrator.close_position_manually(position_id)
+                if not success:
+                    return web.json_response(
+                        {"status": "error", "message": f"Não foi possível fechar a posição #{position_id} (pode já estar fechada)."},
+                        status=400,
+                    )
+            else:
+                self._write_ipc_command("close_position", {"position_id": position_id})
+
+            await self.broadcast_event("trade", {"action": "manual_close", "position_id": position_id})
+            return web.json_response({
+                "status": "success",
+                "message": f"Ordem de venda para fechar a posição #{position_id} executada com sucesso!",
+                "position_id": position_id,
+            })
+        except Exception as exc:
+            logger.error("Erro ao fechar posição manualmente: %s", exc)
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
+    async def handle_position_buy_more(self, request: web.Request) -> web.Response:
+        """Abre uma nova posição para o token informado ou compra novamente na estratégia do card."""
+        try:
+            raw_id = request.match_info.get("id")
+            if not raw_id or not raw_id.isdigit():
+                return web.json_response({"status": "error", "message": "ID de posição inválido."}, status=400)
+            position_id = int(raw_id)
+
+            if self.orchestrator:
+                success, msg = await self.orchestrator.open_position_manually(position_id=position_id)
+                if not success:
+                    return web.json_response({"status": "error", "message": msg}, status=400)
+                resp_msg = msg
+            else:
+                self._write_ipc_command("buy_more", {"position_id": position_id})
+                resp_msg = f"Comando de nova compra para o ativo #{position_id} enviado ao bot com sucesso."
+
+            await self.broadcast_event("trade", {"action": "manual_buy", "position_id": position_id})
+            return web.json_response({
+                "status": "success",
+                "message": resp_msg,
+                "position_id": position_id,
+            })
+        except Exception as exc:
+            logger.error("Erro ao abrir nova posição manualmente: %s", exc)
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
+
 
 @web.middleware
 async def cors_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
@@ -791,6 +847,8 @@ def create_dashboard_app(db: DatabaseManager, orchestrator: Any | None = None) -
     app.router.add_get("/ws", server.handle_ws)
     app.router.add_get("/api/summary", server.handle_summary)
     app.router.add_get("/api/positions", server.handle_positions)
+    app.router.add_post("/api/positions/{id}/close", server.handle_position_close)
+    app.router.add_post("/api/positions/{id}/buy_more", server.handle_position_buy_more)
     app.router.add_get("/api/orders", server.handle_orders)
     app.router.add_get("/api/tokens", server.handle_tokens)
     app.router.add_get("/api/waiting_tokens", server.handle_waiting_tokens)

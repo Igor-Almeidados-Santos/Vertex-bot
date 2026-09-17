@@ -329,6 +329,93 @@ class VertexBotOrchestrator:
             pass
         return self.execution_engine.balance_usd
 
+    async def close_position_manually(self, position_id: int) -> bool:
+        """Encerra manualmente uma posição ativa a pedido do usuário pelo dashboard."""
+        logger.info("🛑 [COMANDO MANUAL] Encerrando posição #%d a mercado...", position_id)
+        success = await self.position_tracker.close_position_manually(position_id)
+        if success:
+            if hasattr(self, "dashboard_server") and self.dashboard_server:
+                broadcast = getattr(self.dashboard_server, "broadcast_event", None)
+                if callable(broadcast):
+                    try:
+                        await broadcast("trade", {"action": "manual_close", "position_id": position_id})
+                    except Exception:
+                        pass
+        return success
+
+    async def open_position_manually(
+        self,
+        position_id: int | None = None,
+        token_address: str | None = None,
+        strategy_type: str = "SCALP",
+    ) -> tuple[bool, str]:
+        """Abre manualmente uma nova posição para o token informado ou baseado em uma posição existente."""
+        resolved_addr = token_address
+        resolved_strat = strategy_type
+
+        if position_id is not None:
+            db_pos = await self.positions_repo.get_by_id(position_id)
+            if db_pos:
+                resolved_addr = db_pos.token_address
+                resolved_strat = db_pos.strategy_type or strategy_type
+
+        if not resolved_addr:
+            return False, "Endereço de token inválido ou não informado."
+
+        max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 2))
+        active_count = len(self.position_tracker.active_positions)
+        if active_count >= max_positions:
+            msg = f"Limite de posições concorrentes atingido ({active_count}/{max_positions}). Encerre uma posição antes de abrir outra."
+            logger.warning("🚫 [COMPRA MANUAL BLOQUEADA] %s", msg)
+            return False, msg
+
+        configured_buy = Decimal(str(getattr(self.settings, "PAPER_BUY_AMOUNT_USD", "1.0")))
+        min_trade = Decimal(str(getattr(self.settings, "MIN_TRADE_AMOUNT_USD", "1.0")))
+        buy_amount = configured_buy if configured_buy > Decimal("0.0") else min_trade
+        available_cash = self.execution_engine.balance_usd
+
+        if available_cash < buy_amount:
+            msg = f"Saldo em caixa insuficiente: Disponível ${available_cash:.2f} < ${buy_amount:.2f} necessário."
+            logger.warning("🚫 [COMPRA MANUAL BLOQUEADA] %s", msg)
+            return False, msg
+
+        token_meta = await self.tokens_repo.get_token_metadata_by_address(resolved_addr)
+        if not token_meta:
+            token_meta = TokenMetadata(
+                address=resolved_addr,
+                symbol="MANUAL",
+                name="Manual Entry Token",
+                chain="solana",
+                dex="raydium",
+            )
+
+        logger.info(
+            "🚀 [COMPRA MANUAL] Abrindo posição %s para %s ($%.2f)...",
+            resolved_strat,
+            token_meta.symbol or resolved_addr[:8],
+            buy_amount,
+        )
+
+        pos = await self.execution_engine.execute_buy(
+            token_meta,
+            amount_usd=buy_amount,
+            strategy_type=resolved_strat,
+        )
+
+        if pos:
+            self.telemetry.record_trade_opened()
+            await self.position_tracker.register_position(pos)
+            if hasattr(self, "dashboard_server") and self.dashboard_server:
+                broadcast = getattr(self.dashboard_server, "broadcast_event", None)
+                if callable(broadcast):
+                    try:
+                        await broadcast("trade", {"action": "manual_buy", "position_id": pos.id})
+                    except Exception:
+                        pass
+            return True, f"Posição #{pos.id} aberta com sucesso para {token_meta.symbol or resolved_addr[:8]} ({resolved_strat})!"
+        else:
+            return False, "Falha na execução da ordem de compra pelo motor de execução."
+
     def _get_session_start_datetime(self) -> datetime | None:
         """Lê o timestamp de início da sessão simulada de data/paper_session.json."""
         state_file = self._get_paper_session_path()
@@ -769,6 +856,19 @@ class VertexBotOrchestrator:
             await self.restart_paper_session(new_balance=bal)
         elif command == "stop":
             await self.stop()
+        elif command == "close_position":
+            pos_id = payload.get("position_id")
+            if pos_id is not None:
+                await self.close_position_manually(int(pos_id))
+        elif command == "buy_more":
+            pos_id = payload.get("position_id")
+            token_addr = payload.get("token_address")
+            strat = payload.get("strategy_type", "SCALP")
+            await self.open_position_manually(
+                position_id=int(pos_id) if pos_id is not None else None,
+                token_address=str(token_addr) if token_addr else None,
+                strategy_type=str(strat),
+            )
 
     async def start(self, run_mock_stream: bool = False) -> None:
         """Inicia todas as tarefas cooperativas do bot."""
@@ -1646,6 +1746,8 @@ class VertexBotOrchestrator:
                                     "trailing_stop_price": float(pos.trailing_stop_price),
                                     "unrealized_pnl_usd": round(float(pos.unrealized_pnl_usd), 4),
                                     "unrealized_pnl_pct": round(float(pos.roi_pct), 2),
+                                    "ratchet_floor_price": float(pos.ratchet_floor_price),
+                                    "active_tier": pos.ratchet_tier,
                                 },
                             )
                         )

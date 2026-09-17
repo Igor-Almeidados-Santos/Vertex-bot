@@ -58,6 +58,19 @@ class MockOrchestrator:
         else:
             self.execution_engine.balance_usd = Decimal("5.00")
 
+    async def close_position_manually(self, position_id: int) -> bool:
+        return position_id == 1
+
+    async def open_position_manually(
+        self,
+        position_id: int | None = None,
+        token_address: str | None = None,
+        strategy_type: str = "SCALP",
+    ) -> tuple[bool, str]:
+        if position_id == 1:
+            return True, f"Posição #{position_id} comprada com sucesso"
+        return False, "Posição não encontrada"
+
     async def initialize(self) -> None:
         pass
 
@@ -161,6 +174,20 @@ async def test_dashboard_control_endpoints(tmp_path: Path) -> None:
         assert data_start["status"] == "success"
         assert mock_orch.is_running is True
 
+        # 9. POST /api/positions/1/close
+        resp_close = await client.post("/api/positions/1/close")
+        assert resp_close.status == 200
+        data_close = await resp_close.json()
+        assert data_close["status"] == "success"
+        assert "fechar a posição #1" in data_close["message"]
+
+        # 10. POST /api/positions/1/buy_more
+        resp_buy = await client.post("/api/positions/1/buy_more")
+        assert resp_buy.status == 200
+        data_buy = await resp_buy.json()
+        assert data_buy["status"] == "success"
+        assert "comprada com sucesso" in data_buy["message"]
     finally:
         await client.close()
+        await server.close()
         await db.close()

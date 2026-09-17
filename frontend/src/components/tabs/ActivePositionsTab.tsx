@@ -8,17 +8,63 @@ import {
   Clock,
   Layers,
   AlertTriangle,
+  XCircle,
+  PlusCircle,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
 } from "lucide-react";
 import { PositionItem } from "@/types/bot";
-import { formatUSD, formatPct, shortenAddress, formatTimeAgo } from "@/lib/formatters";
+import {
+  formatUSD,
+  formatPct,
+  shortenAddress,
+  formatTimeAgo,
+  formatCryptoPrice,
+} from "@/lib/formatters";
+import { closePosition, buyMorePosition } from "@/lib/api";
 
 interface ActivePositionsTabProps {
   positions: PositionItem[];
+  onRefresh?: () => void;
 }
 
-export function ActivePositionsTab({ positions }: ActivePositionsTabProps) {
+export function ActivePositionsTab({ positions, onRefresh }: ActivePositionsTabProps) {
   const activePositions = positions.filter((p) => p.status === "OPEN");
   const [filterStrategy, setFilterStrategy] = useState<"ALL" | "SCALP" | "SWING">("ALL");
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ id: number; message: string; isError?: boolean } | null>(null);
+
+  const handleClose = async (posId: number) => {
+    if (!window.confirm(`Deseja realmente liquidar e fechar a mercado a posição #${posId}?`)) return;
+    setActionLoading(`close-${posId}`);
+    setFeedback(null);
+    try {
+      const res = await closePosition(posId);
+      setFeedback({ id: posId, message: res.message || "Posição fechada com sucesso!" });
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      setFeedback({ id: posId, message: err?.message || "Erro ao encerrar posição", isError: true });
+    } finally {
+      setActionLoading(null);
+      setTimeout(() => setFeedback(null), 6000);
+    }
+  };
+
+  const handleBuyMore = async (posId: number, strategy: string) => {
+    setActionLoading(`buy-${posId}`);
+    setFeedback(null);
+    try {
+      const res = await buyMorePosition(posId);
+      setFeedback({ id: posId, message: res.message || `Nova ordem ${strategy} enviada com sucesso!` });
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      setFeedback({ id: posId, message: err?.message || "Erro ao abrir nova posição", isError: true });
+    } finally {
+      setActionLoading(null);
+      setTimeout(() => setFeedback(null), 6000);
+    }
+  };
 
   const filtered = activePositions.filter((p) => {
     if (filterStrategy === "ALL") return true;
@@ -172,14 +218,14 @@ export function ActivePositionsTab({ positions }: ActivePositionsTabProps) {
                 <div className="grid grid-cols-2 gap-2 text-xs py-2 border-y border-border/60">
                   <div>
                     <span className="text-gray-400 block text-[10px]">Entrada</span>
-                    <span className="font-mono text-white font-medium">
-                      {formatUSD(pos.entry_price, 6)}
+                    <span className="font-mono text-white font-medium" title={String(pos.entry_price)}>
+                      {formatCryptoPrice(pos.entry_price)}
                     </span>
                   </div>
                   <div>
                     <span className="text-gray-400 block text-[10px]">Preço Atual</span>
-                    <span className="font-mono text-white font-medium">
-                      {formatUSD(pos.current_price, 6)}
+                    <span className="font-mono text-white font-medium" title={String(pos.current_price)}>
+                      {formatCryptoPrice(pos.current_price)}
                     </span>
                   </div>
                   <div>
@@ -190,8 +236,8 @@ export function ActivePositionsTab({ positions }: ActivePositionsTabProps) {
                   </div>
                   <div>
                     <span className="text-gray-400 block text-[10px]">Máx Atingido</span>
-                    <span className="font-mono text-white font-medium">
-                      {formatUSD(pos.highest_price_seen, 6)}
+                    <span className="font-mono text-white font-medium" title={String(pos.highest_price_seen)}>
+                      {formatCryptoPrice(pos.highest_price_seen)}
                     </span>
                   </div>
                 </div>
@@ -203,7 +249,7 @@ export function ActivePositionsTab({ positions }: ActivePositionsTabProps) {
                       <span className="text-gray-400 flex items-center gap-1">
                         <Shield className="w-3 h-3 text-amber-400" /> Trailing Stop:
                       </span>
-                      <span>{formatUSD(pos.trailing_stop_price, 6)}</span>
+                      <span>{formatCryptoPrice(pos.trailing_stop_price)}</span>
                     </div>
                   )}
 
@@ -212,14 +258,65 @@ export function ActivePositionsTab({ positions }: ActivePositionsTabProps) {
                       <span className="flex items-center gap-1">
                         <TrendingUp className="w-3 h-3" /> Piso Catraca (T{pos.active_tier || 1}):
                       </span>
-                      <span>{formatUSD(pos.ratchet_floor_price, 6)}</span>
+                      <span>{formatCryptoPrice(pos.ratchet_floor_price)}</span>
                     </div>
                   )}
                 </div>
               </div>
 
+              {/* Ações Manuais do Card */}
+              <div className="grid grid-cols-2 gap-2 pt-3 mt-2 border-t border-border/60">
+                <button
+                  type="button"
+                  onClick={() => handleClose(pos.id)}
+                  disabled={actionLoading === `close-${pos.id}` || actionLoading === `buy-${pos.id}`}
+                  className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Vender 100% da posição imediatamente a mercado"
+                >
+                  {actionLoading === `close-${pos.id}` ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <XCircle className="w-3.5 h-3.5" />
+                  )}
+                  <span>Fechar</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleBuyMore(pos.id, pos.strategy_type)}
+                  disabled={actionLoading === `close-${pos.id}` || actionLoading === `buy-${pos.id}`}
+                  className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 border border-blue-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={`Abrir nova posição neste token na estratégia ${pos.strategy_type}`}
+                >
+                  {actionLoading === `buy-${pos.id}` ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <PlusCircle className="w-3.5 h-3.5" />
+                  )}
+                  <span>Comprar Mais</span>
+                </button>
+              </div>
+
+              {/* Notificação Feedback Inline */}
+              {feedback && feedback.id === pos.id && (
+                <div
+                  className={`mt-2 p-1.5 rounded text-[11px] flex items-center gap-1.5 transition-all ${
+                    feedback.isError
+                      ? "bg-red-500/20 text-red-300 border border-red-500/30"
+                      : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                  }`}
+                >
+                  {feedback.isError ? (
+                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                  ) : (
+                    <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                  )}
+                  <span className="truncate">{feedback.message}</span>
+                </div>
+              )}
+
               {/* Footer do Card */}
-              <div className="flex items-center justify-between pt-3 mt-2 border-t border-border/60 text-[11px] text-gray-400">
+              <div className="flex items-center justify-between pt-2 mt-1 text-[11px] text-gray-400">
                 <span className="flex items-center gap-1">
                   <Clock className="w-3 h-3" /> Aberta {formatTimeAgo(pos.opened_at)}
                 </span>
