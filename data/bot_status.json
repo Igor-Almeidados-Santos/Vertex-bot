@@ -1,9 +1,9 @@
 {
   "is_running": false,
   "is_paused": false,
-  "wallet_balance_usd": 20.0,
-  "initial_wallet_usd": 20.0,
+  "wallet_balance_usd": 10.0,
+  "initial_wallet_usd": 10.0,
   "active_positions_count": 0,
-  "pid": 25197,
-  "timestamp": 1789749031.951672
+  "pid": 66938,
+  "timestamp": 1789753783.696276
 }

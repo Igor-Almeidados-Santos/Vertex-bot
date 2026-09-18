@@ -106,6 +106,8 @@ async def test_batch_dexscreener_lookup() -> None:
             {
                 "chainId": "ethereum",
                 "baseToken": {"address": "tokenETH"},
+                "chainId": "fantom",
+                "baseToken": {"address": "tokenFTM"},
                 "liquidity": {"usd": 100000.0},
             },
         ]
@@ -120,6 +122,7 @@ async def test_batch_dexscreener_lookup() -> None:
     assert "tokenA" in result
     assert result["tokenA"]["pairAddress"] == "pool_high_liq"
     assert "tokenETH" not in result
+    assert "tokenFTM" not in result
 
 
 async def test_evaluate_and_enrich_token_with_preloaded_hint() -> None:
@@ -372,4 +375,44 @@ async def test_swing_maturation_incubator_progression() -> None:
     assert swing_token.address == "token_prog"
     assert "token_prog" not in scanner._maturing_swing_tokens
     assert "token_prog" in scanner._seen_swing
+
+
+async def test_mature_scanner_multichain_base_enrichment() -> None:
+    """Valida que tokens na rede Base são identificados com chain='base' e enriquecidos com sucesso."""
+    queue: asyncio.Queue[TokenMetadata] = asyncio.Queue()
+    scanner = MatureTokenScanner(
+        detection_queue=queue,
+        target_chains=("solana", "base"),
+        min_age_hours=1.0,
+        max_age_hours=24.0,
+    )
+
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    two_hours_ago_ms = now_ms - 2 * 3600 * 1000
+
+    base_pair = {
+        "chainId": "base",
+        "dexId": "aerodrome",
+        "pairAddress": "0x000000000000000000000000000000000000pool",
+        "baseToken": {
+            "address": "0x000000000000000000000000000000000000tkn1",
+            "symbol": "AEROCOIN",
+            "name": "Aerodrome Meme Token",
+        },
+        "liquidity": {"usd": 35000.0},
+        "pairCreatedAt": two_hours_ago_ms,
+    }
+
+    token, is_perm = await scanner._evaluate_and_enrich_token(
+        "0x000000000000000000000000000000000000tkn1",
+        {"pair_data": base_pair, "chain": "base"},
+    )
+
+    assert token is not None
+    assert token.chain == "base"
+    assert token.dex == "aerodrome"
+    assert token.symbol == "AEROCOIN"
+    assert token.initial_liquidity_usd == Decimal("35000.0")
+    assert is_perm is True
+
 

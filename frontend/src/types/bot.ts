@@ -100,6 +100,7 @@ export interface PositionItem {
   token_symbol?: string;
   symbol?: string;
   name?: string;
+  chain?: string;
   strategy_type: "SCALP" | "SWING" | string;
   status: "OPEN" | "CLOSED" | "PARTIALLY_CLOSED" | "STOPPED" | string;
   mode?: string;
@@ -152,6 +153,7 @@ export interface OrderItem {
   token_symbol?: string;
   symbol?: string;
   name?: string;
+  chain?: string;
   order_type: "BUY" | "SELL" | string;
   price: number;
   amount_usd?: number;

@@ -6,6 +6,8 @@ import os
 from decimal import Decimal
 from typing import Literal
 
+from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -110,8 +112,52 @@ class Settings(BaseSettings):
     MIN_UNIQUE_TRADERS_24H: int = 15  # Mínimo de traders únicos para tokens com volume expressivo
     MAX_PARABOLIC_1H_GAIN_PCT: Decimal = Decimal("250.0")  # Teto de rali parabólico em 1h para exaustão pós-pump
 
+    # === MULTI-CHAIN CONFIGURATION ===
+    ENABLED_CHAINS: list[str] | str = Field(
+        default_factory=lambda: [
+            "solana",
+            "base",
+            "arbitrum",
+            "bsc",
+            "polygon",
+            "ethereum",
+            "avalanche",
+            "optimism",
+            "blast",
+        ]
+    )
+
+    @field_validator("ENABLED_CHAINS", mode="after")
+    @classmethod
+    def normalize_enabled_chains(cls, v: list[str] | str) -> list[str]:
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("[") and v.endswith("]"):
+                import json
+
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(x).strip().lower() for x in parsed]
+                except Exception:
+                    pass
+            return [x.strip().lower() for x in v.split(",") if x.strip()]
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip().lower() for x in v]
+        return ["solana", "base"]
+    BASE_RPC_URL: str = "https://mainnet.base.org"
+    ARBITRUM_RPC_URL: str = "https://arb1.arbitrum.io/rpc"
+    BSC_RPC_URL: str = "https://bsc-dataseed.binance.org"
+    POLYGON_RPC_URL: str = "https://polygon-rpc.com"
+    ETHEREUM_RPC_URL: str = "https://eth.llamarpc.com"
+    AVALANCHE_RPC_URL: str = "https://api.avax.network/ext/bc/C/rpc"
+    OPTIMISM_RPC_URL: str = "https://mainnet.optimism.io"
+    BLAST_RPC_URL: str = "https://rpc.blast.io"
+    GOPLUS_API_BASE_URL: str = "https://api.gopluslabs.io/api/v1"
+
     # === LIVE TRADING ===
     WALLET_PRIVATE_KEY_BASE58: str | None = None
+    EVM_WALLET_PRIVATE_KEY: str | None = None
 
 
 def load_env_file(filepath: str = ".env") -> dict[str, str]:
@@ -144,6 +190,18 @@ def _apply_env_var(settings: Settings, k: str, v: str) -> None:
         setattr(settings, k, float(v))
     elif isinstance(current_val, Decimal):
         setattr(settings, k, Decimal(v))
+    elif isinstance(current_val, list):
+        if v.startswith("[") and v.endswith("]"):
+            import json
+
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    setattr(settings, k, [str(item).strip() for item in parsed])
+                    return
+            except Exception:
+                pass
+        setattr(settings, k, [item.strip() for item in v.split(",") if item.strip()])
     else:
         setattr(settings, k, v)
 

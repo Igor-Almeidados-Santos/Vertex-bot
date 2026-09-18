@@ -197,6 +197,7 @@ def create_scanner(
             dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
             geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
             enable_established_pools=enable_established,
+            target_chains=getattr(settings, "ENABLED_CHAINS", ("solana", "base")),
         )
         graduation_scanner = RaydiumGraduationScanner(
             detection_queue=detection_queue,
@@ -258,6 +259,7 @@ def create_scanner(
             dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
             geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
             enable_established_pools=enable_established,
+            target_chains=getattr(settings, "ENABLED_CHAINS", ("solana", "base")),
         )
     elif provider == "PUMPPORTAL":
         from src.scanner.pumpportal import PumpPortalScanner

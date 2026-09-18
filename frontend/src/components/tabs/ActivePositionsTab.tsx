@@ -23,6 +23,7 @@ import {
   formatCryptoPrice,
 } from "@/lib/formatters";
 import { closePosition, buyMorePosition } from "@/lib/api";
+import { ChainBadge } from "@/components/ChainBadge";
 
 interface ActivePositionsTabProps {
   positions: PositionItem[];
@@ -32,6 +33,7 @@ interface ActivePositionsTabProps {
 export function ActivePositionsTab({ positions, onRefresh }: ActivePositionsTabProps) {
   const activePositions = positions.filter((p) => p.status === "OPEN");
   const [filterStrategy, setFilterStrategy] = useState<"ALL" | "SCALP" | "SWING">("ALL");
+  const [filterChain, setFilterChain] = useState<string>("ALL");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ id: number; message: string; isError?: boolean } | null>(null);
 
@@ -67,8 +69,9 @@ export function ActivePositionsTab({ positions, onRefresh }: ActivePositionsTabP
   };
 
   const filtered = activePositions.filter((p) => {
-    if (filterStrategy === "ALL") return true;
-    return p.strategy_type === filterStrategy;
+    if (filterStrategy !== "ALL" && p.strategy_type !== filterStrategy) return false;
+    if (filterChain !== "ALL" && (p.chain || "solana").toLowerCase() !== filterChain.toLowerCase()) return false;
+    return true;
   });
 
   if (activePositions.length === 0) {
@@ -87,39 +90,100 @@ export function ActivePositionsTab({ positions, onRefresh }: ActivePositionsTabP
 
   return (
     <div className="space-y-4">
-      {/* Filtros por Estratégia */}
+      {/* Filtros por Estratégia e Rede */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-1.5 bg-surface-card p-1 rounded-xl border border-border">
-          <button
-            onClick={() => setFilterStrategy("ALL")}
-            className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
-              filterStrategy === "ALL"
-                ? "bg-brand-500 text-white shadow-sm"
-                : "text-gray-400 hover:text-white"
-            }`}
-          >
-            Todas ({activePositions.length})
-          </button>
-          <button
-            onClick={() => setFilterStrategy("SCALP")}
-            className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
-              filterStrategy === "SCALP"
-                ? "bg-scalp text-black font-semibold shadow-sm"
-                : "text-gray-400 hover:text-white"
-            }`}
-          >
-            Scalp ({activePositions.filter((p) => p.strategy_type === "SCALP").length})
-          </button>
-          <button
-            onClick={() => setFilterStrategy("SWING")}
-            className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
-              filterStrategy === "SWING"
-                ? "bg-swing text-white shadow-sm"
-                : "text-gray-400 hover:text-white"
-            }`}
-          >
-            Swing ({activePositions.filter((p) => p.strategy_type === "SWING").length})
-          </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 bg-surface-card p-1 rounded-xl border border-border">
+            <button
+              onClick={() => setFilterStrategy("ALL")}
+              className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
+                filterStrategy === "ALL"
+                  ? "bg-brand-500 text-white shadow-sm"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              Todas ({activePositions.length})
+            </button>
+            <button
+              onClick={() => setFilterStrategy("SCALP")}
+              className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
+                filterStrategy === "SCALP"
+                  ? "bg-scalp text-black font-semibold shadow-sm"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              Scalp ({activePositions.filter((p) => p.strategy_type === "SCALP").length})
+            </button>
+            <button
+              onClick={() => setFilterStrategy("SWING")}
+              className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
+                filterStrategy === "SWING"
+                  ? "bg-swing text-white shadow-sm"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              Swing ({activePositions.filter((p) => p.strategy_type === "SWING").length})
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1 bg-surface-card p-1 rounded-xl border border-border">
+            <button
+              onClick={() => setFilterChain("ALL")}
+              className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
+                filterChain === "ALL"
+                  ? "bg-gray-700 text-white shadow-sm"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              Multi-Chain
+            </button>
+            <button
+              onClick={() => setFilterChain("solana")}
+              className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
+                filterChain === "solana"
+                  ? "bg-purple-600 text-white shadow-sm font-semibold"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              Solana
+            </button>
+            <button
+              onClick={() => setFilterChain("base")}
+              className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
+                filterChain === "base"
+                  ? "bg-blue-600 text-white shadow-sm font-semibold"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              Base
+            </button>
+          {/* Filtro por Rede */}
+          <div className="flex items-center gap-1 bg-surface-card p-1 rounded-xl border border-border overflow-x-auto max-w-full">
+            {[
+              { id: "ALL", label: "Todas Redes", activeClass: "bg-gray-700 text-white" },
+              { id: "solana", label: "Solana", activeClass: "bg-purple-600 text-white" },
+              { id: "base", label: "Base", activeClass: "bg-blue-600 text-white" },
+              { id: "arbitrum", label: "Arbitrum", activeClass: "bg-cyan-600 text-white" },
+              { id: "bsc", label: "BSC", activeClass: "bg-yellow-600 text-white" },
+              { id: "polygon", label: "Polygon", activeClass: "bg-violet-600 text-white" },
+              { id: "ethereum", label: "Ethereum", activeClass: "bg-indigo-600 text-white" },
+              { id: "avalanche", label: "Avalanche", activeClass: "bg-red-600 text-white" },
+              { id: "optimism", label: "Optimism", activeClass: "bg-rose-600 text-white" },
+              { id: "blast", label: "Blast", activeClass: "bg-emerald-600 text-white" },
+            ].map((chainItem) => (
+              <button
+                key={chainItem.id}
+                onClick={() => setFilterChain(chainItem.id)}
+                className={`px-2 py-1 text-xs font-medium rounded-lg whitespace-nowrap transition-all ${
+                  filterChain.toLowerCase() === chainItem.id.toLowerCase()
+                    ? `${chainItem.activeClass} shadow-sm font-semibold`
+                    : "text-gray-400 hover:text-white"
+                }`}
+              >
+                {chainItem.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <span className="text-xs text-gray-400 font-mono">
@@ -138,7 +202,8 @@ export function ActivePositionsTab({ positions, onRefresh }: ActivePositionsTabP
           const address = pos.token_address || pos.address || "";
           const symbol = pos.symbol || pos.token_symbol || shortenAddress(address);
           const name = pos.name && pos.name !== "N/A" ? pos.name : "";
-          const dexUrl = `https://dexscreener.com/solana/${address}`;
+          const chain = (pos.chain || "solana").toLowerCase();
+          const dexUrl = `https://dexscreener.com/${chain}/${address}`;
 
           return (
             <div
@@ -162,6 +227,7 @@ export function ActivePositionsTab({ positions, onRefresh }: ActivePositionsTabP
                           ({name})
                         </span>
                       )}
+                      <ChainBadge chain={pos.chain} />
                       <span
                         className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
                           isScalp

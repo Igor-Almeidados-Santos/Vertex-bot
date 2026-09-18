@@ -3,6 +3,7 @@
 import { OrderItem } from "@/types/bot";
 import { formatUSD, formatNumber, shortenAddress, formatTimeAgo } from "@/lib/formatters";
 import { ArrowDownLeft, ArrowUpRight, ExternalLink } from "lucide-react";
+import { ChainBadge } from "@/components/ChainBadge";
 
 interface OrdersTabProps {
   orders: OrderItem[];
@@ -41,7 +42,8 @@ export function OrdersTab({ orders }: OrdersTabProps) {
               const address = ord.token_address || "";
               const symbol = ord.token_symbol || ord.symbol || shortenAddress(address);
               const name = ord.name && ord.name !== "N/A" ? ord.name : "";
-              const dexUrl = `https://dexscreener.com/solana/${address}`;
+              const chain = (ord.chain || "solana").toLowerCase();
+              const dexUrl = `https://dexscreener.com/${chain}/${address}`;
               const amountUsd = ord.amount_usd ?? ord.total_usd ?? 0;
               const tokenAmount = ord.tokens_amount ?? ord.amount ?? 0;
               const reason = ord.reason || ord.notes || (isBuy ? "Entrada na Posição" : "Encerramento da Posição");
@@ -72,6 +74,7 @@ export function OrdersTab({ orders }: OrdersTabProps) {
                           ({name})
                         </span>
                       )}
+                      <ChainBadge chain={ord.chain} />
                       {address && (
                         <a
                           href={dexUrl}

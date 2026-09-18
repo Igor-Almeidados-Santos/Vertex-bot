@@ -5,6 +5,7 @@ import { Search, ExternalLink, RefreshCw, Eye } from "lucide-react";
 import { CatalogTokenItem } from "@/types/bot";
 import { getTokens } from "@/lib/api";
 import { formatUSD, shortenAddress, formatTimeAgo } from "@/lib/formatters";
+import { ChainBadge } from "@/components/ChainBadge";
 
 export function TokenCatalogTab() {
   const [tokens, setTokens] = useState<CatalogTokenItem[]>([]);
@@ -115,6 +116,8 @@ export function TokenCatalogTab() {
                 const score = tok.security_score ?? tok.score;
                 const catalogedAt = tok.cataloged_at || tok.detection_timestamp || "";
 
+                const chain = (tok.chain || "solana").toLowerCase();
+
                 return (
                   <tr key={tok.address} className="hover:bg-surface-hover/50 transition-colors">
                     <td className="py-3 px-4">
@@ -127,8 +130,9 @@ export function TokenCatalogTab() {
                             ({name})
                           </span>
                         )}
+                        <ChainBadge chain={tok.chain} />
                         <a
-                          href={`https://dexscreener.com/solana/${tok.address}`}
+                          href={`https://dexscreener.com/${chain}/${tok.address}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-gray-400 hover:text-brand-300 font-mono inline-flex items-center"

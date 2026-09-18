@@ -10,6 +10,7 @@ from src.database.models import SecurityAuditResult, SecurityStatus, TokenMetada
 from src.database.repository import TokensRepository
 from src.scanner.client import ResilientRPCClient
 from src.security.checks import SecurityChecks
+from src.security.evm_validator import EVMSecurityValidator
 from src.security.market_dynamics import MarketDynamicsValidator
 from src.security.simulator import TransactionSimulator
 from src.utils.exceptions import RPCConnectionError
@@ -29,6 +30,7 @@ class SecurityValidator:
         max_top10_pct: float = 15.0,
         max_tax_pct: float = 3.0,
         market_validator: MarketDynamicsValidator | None = None,
+        evm_validator: EVMSecurityValidator | None = None,
         strategy_mode: str = "DUAL",
     ) -> None:
         self.tokens_repo: TokensRepository = tokens_repo
@@ -37,6 +39,9 @@ class SecurityValidator:
         self.max_top10_pct: float = max_top10_pct
         self.max_tax_pct: float = max_tax_pct
         self.market_validator: MarketDynamicsValidator | None = market_validator
+        self.evm_validator: EVMSecurityValidator = (
+            evm_validator or EVMSecurityValidator(max_tax_pct=Decimal(str(max_tax_pct)))
+        )
         self.strategy_mode: str = strategy_mode
 
     async def audit_token(
@@ -85,7 +90,63 @@ class SecurityValidator:
                     sell_tax_percentage=0.0,
                 )
 
-        # 2. Hard Gates On-Chain (Mint, Freeze, LP, Top10, Swap)
+        # 2. Roteamento por Chain: Redes EVM (Base, Arbitrum, BSC, etc.) vs Solana
+        chain_name = str(token.chain or "solana").lower().strip()
+        if chain_name != "solana":
+            is_evm_safe, evm_reason, evm_details = await self.evm_validator.check_token_security(
+                chain=chain_name,
+                token_address=token.address,
+                mock_override=mo.get("is_evm_safe") if "is_evm_safe" in mo else None,  # type: ignore
+            )
+            if not is_evm_safe:
+                return await self._build_rejection(
+                    token.address,
+                    evm_reason or f"Reprovado na auditoria EVM para a rede {token.chain}",
+                    details=evm_details,
+                )
+
+            # Dinâmica de mercado unificada (anti-cliff 24h, dump 6h/1h, volume, liquidez)
+            if self.market_validator:
+                is_dyn_ok, dyn_reason, dyn_details = self.market_validator.evaluate(
+                    token,
+                    strategy_mode=self.strategy_mode,
+                    mock_override=mo.get("market_dynamics_approved") if "market_dynamics_approved" in mo else None,  # type: ignore
+                )
+                if not is_dyn_ok:
+                    return await self._build_rejection(
+                        token.address,
+                        f"Dinâmica de Mercado insatisfatória: {dyn_reason}",
+                        details=dyn_details,
+                    )
+
+            # Aprovado com sucesso para a rede EVM
+            try:
+                raw_buy_tax = float(evm_details.get("buy_tax") or 0.0) * 100.0
+            except Exception:
+                raw_buy_tax = 0.0
+            try:
+                raw_sell_tax = float(evm_details.get("sell_tax") or 0.0) * 100.0
+            except Exception:
+                raw_sell_tax = 0.0
+
+            audit_result = SecurityAuditResult(
+                token_address=token.address,
+                status=SecurityStatus.APPROVED,
+                security_score=100.0,
+                is_mint_revoked=True,
+                is_freeze_revoked=True,
+                is_lp_burned_or_locked=True,
+                lp_burn_percentage=100.0,
+                top10_holder_percentage=0.0,
+                is_honeypot=False,
+                buy_tax_percentage=raw_buy_tax,
+                sell_tax_percentage=raw_sell_tax,
+                details=evm_details,
+            )
+            await self.tokens_repo.update_audit_result(audit_result)
+            return audit_result
+
+        # 3. Hard Gates On-Chain da Solana (Mint, Freeze, LP, Top10, Swap)
         try:
             # Checagem de Mint Authority
             is_mint_revoked = await SecurityChecks.check_mint_authority(

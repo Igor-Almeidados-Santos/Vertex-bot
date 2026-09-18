@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { WaitingTokenItem } from "@/types/bot";
 import { formatUSD, shortenAddress, formatTimeAgo } from "@/lib/formatters";
+import { ChainBadge } from "@/components/ChainBadge";
 
 interface IncubatorTabProps {
   waitingTokens: WaitingTokenItem[];
@@ -200,8 +201,22 @@ export function IncubatorTab({ waitingTokens }: IncubatorTabProps) {
                   const address = item.address || item.token_address || "";
                   const symbol = item.symbol || item.token_symbol || shortenAddress(address);
                   const name = item.name && item.name !== "N/A" ? item.name : "";
-                  const dexUrl = `https://dexscreener.com/solana/${address}`;
-                  const solscanUrl = `https://solscan.io/token/${address}`;
+                  const chain = (item.chain || "solana").toLowerCase();
+                  const dexUrl = `https://dexscreener.com/${chain}/${address}`;
+                  const explorerUrl = chain === "base"
+                    ? `https://basescan.org/token/${address}`
+                    : chain === "arbitrum"
+                    ? `https://arbiscan.io/token/${address}`
+                    : chain === "bsc"
+                    ? `https://bscscan.com/token/${address}`
+                    : `https://solscan.io/token/${address}`;
+                  const explorerName = chain === "base"
+                    ? "BaseScan"
+                    : chain === "arbitrum"
+                    ? "Arbiscan"
+                    : chain === "bsc"
+                    ? "BscScan"
+                    : "Solscan";
                   const liquidity = item.initial_liquidity_usd ?? item.liquidity_usd ?? 0;
                   const reason = item.waiting_reason || item.reason_pending || "AGUARDANDO_SLOT";
                   const enqueuedAt = item.enqueued_at || item.added_at || "";
@@ -215,6 +230,7 @@ export function IncubatorTab({ waitingTokens }: IncubatorTabProps) {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-bold text-white text-sm">{symbol}</span>
                           {name && <span className="text-gray-400 text-xs font-normal">({name})</span>}
+                          <ChainBadge chain={item.chain} />
                           <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
                             <ShieldCheck className="w-3 h-3" /> Auditado
                           </span>
@@ -303,12 +319,12 @@ export function IncubatorTab({ waitingTokens }: IncubatorTabProps) {
 
                       <td className="py-3 px-4 text-right">
                         <a
-                          href={solscanUrl}
+                          href={explorerUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-2.5 py-1.5 rounded-lg bg-surface border border-border text-gray-300 hover:text-white hover:border-brand-500/40 text-[11px] inline-flex items-center gap-1 transition-all"
                         >
-                          Solscan <ExternalLink className="w-3 h-3" />
+                          {explorerName} <ExternalLink className="w-3 h-3" />
                         </a>
                       </td>
                     </tr>

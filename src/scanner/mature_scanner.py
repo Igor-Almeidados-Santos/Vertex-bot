@@ -31,6 +31,31 @@ class MatureTokenScanner:
     estritamente tokens que possuem entre 1 e 5 horas de existência.
     """
 
+    GECKO_NETWORK_MAP: dict[str, str] = {
+        "solana": "solana",
+        "base": "base",
+        "arbitrum": "arbitrum",
+        "bsc": "bsc",
+        "polygon": "polygon_pos",
+        "ethereum": "eth",
+        "avalanche": "avax",
+        "optimism": "optimism",
+        "blast": "blast",
+    }
+
+    GECKO_PREFIX_MAP: dict[str, str] = {
+        "solana_": "solana",
+        "base_": "base",
+        "arbitrum_": "arbitrum",
+        "bsc_": "bsc",
+        "polygon_pos_": "polygon",
+        "polygon_": "polygon",
+        "eth_": "ethereum",
+        "avax_": "avalanche",
+        "optimism_": "optimism",
+        "blast_": "blast",
+    }
+
     def __init__(
         self,
         detection_queue: asyncio.Queue[TokenMetadata],
@@ -47,6 +72,17 @@ class MatureTokenScanner:
         geckoterminal_base_url: str = "https://api.geckoterminal.com",
         max_seen_cache: int = 10000,
         enable_established_pools: bool = False,
+        target_chains: tuple[str, ...] | list[str] = (
+            "solana",
+            "base",
+            "arbitrum",
+            "bsc",
+            "polygon",
+            "ethereum",
+            "avalanche",
+            "optimism",
+            "blast",
+        ),
     ) -> None:
         self.detection_queue: asyncio.Queue[TokenMetadata] = detection_queue
         self.min_age_hours: float = min_age_hours
@@ -62,6 +98,7 @@ class MatureTokenScanner:
         self.geckoterminal_base_url: str = geckoterminal_base_url.rstrip("/")
         self.max_seen_cache: int = max_seen_cache
         self.enable_established_pools: bool = enable_established_pools
+        self.target_chains: tuple[str, ...] = tuple(c.lower().strip() for c in target_chains)
 
         self._seen_addresses: set[str] = set()
         self._seen_scalp: set[str] = set()
@@ -337,7 +374,7 @@ class MatureTokenScanner:
             await asyncio.sleep(self.poll_interval)
 
     async def _gather_candidates(self) -> list[tuple[str, dict[str, Any]]]:
-        """Agrega endereços candidatos da Solana de múltiplas fontes públicas com metadados pré-carregados."""
+        """Agrega endereços candidatos de múltiplas fontes públicas com metadados pré-carregados nas chains ativas."""
         results: list[tuple[str, dict[str, Any]]] = []
 
         # 1. DexScreener Search (rotativo por palavras-chave com metadados de pares embutidos)
@@ -345,22 +382,26 @@ class MatureTokenScanner:
         results.extend(search_candidates)
 
         # 2. DexScreener Boosts, Profiles e Community Takeovers
-        dex_addresses = await self._fetch_dexscreener_candidates()
-        unseen_dex_addrs = [
-            a for a in dex_addresses
-            if self._is_candidate_needed(a)
+        dex_tokens = await self._fetch_dexscreener_candidates()
+        unseen_dex_tokens = [
+            (addr, ch) for addr, ch in dex_tokens
+            if self._is_candidate_needed(addr)
         ]
-        if unseen_dex_addrs:
-            batch_pairs = await self._query_dexscreener_pairs_batch(unseen_dex_addrs)
-            for addr in unseen_dex_addrs:
+        if unseen_dex_tokens:
+            unseen_addrs = [addr for addr, _ in unseen_dex_tokens]
+            batch_pairs = await self._query_dexscreener_pairs_batch(unseen_addrs)
+            for addr, ch in unseen_dex_tokens:
                 pair_data = batch_pairs.get(addr)
-                results.append((addr, {"pair_data": pair_data} if pair_data else {}))
+                hint_dict: dict[str, Any] = {"chain": ch}
+                if pair_data:
+                    hint_dict["pair_data"] = pair_data
+                results.append((addr, hint_dict))
 
-        # 3. GeckoTerminal Solana New Pools (crawler rotativo respeitando cota sem rate limit)
+        # 3. GeckoTerminal New Pools (crawler rotativo respeitando cota sem rate limit)
         gecko_pools = await self._fetch_geckoterminal_candidates(pages=1)
         results.extend(gecko_pools)
 
-        # 4. GeckoTerminal Solana Top & Trending Pools (Tokens Consolidados 1d a 1 mês e Trending 1h/6h)
+        # 4. GeckoTerminal Top & Trending Pools (Tokens Consolidados 1d a 1 mês e Trending 1h/6h)
         if self.enable_established_pools:
             established_pools = await self._fetch_geckoterminal_established_pools()
             results.extend(established_pools)
@@ -370,11 +411,14 @@ class MatureTokenScanner:
     async def _fetch_dexscreener_search_candidates(
         self,
     ) -> list[tuple[str, dict[str, Any]]]:
-        """Coleta tokens na rede Solana a partir de buscas rotativas semânticas de alto engajamento."""
+        """Coleta tokens a partir de buscas rotativas semânticas de alto engajamento nas redes ativas."""
         all_queries = [
-            "solana", "raydium", "pump", "meteora",
+            "solana", "base", "raydium", "aerodrome", "pump", "meteora",
             "ai", "cat", "dog", "agent", "meme",
             "pepe", "inu", "moon", "trump", "coin"
+            "solana", "base", "arbitrum", "bsc", "polygon", "ethereum", "avalanche", "optimism", "blast",
+            "raydium", "aerodrome", "pancake", "camelot", "uniswap", "quickswap", "traderjoe",
+            "ai", "cat", "dog", "agent", "meme", "pepe", "inu", "moon", "trump", "coin"
         ]
         idx = (self._search_cycle_idx * 3) % len(all_queries)
         self._search_cycle_idx += 1
@@ -400,7 +444,7 @@ class MatureTokenScanner:
                             else None
                         )
                         if (
-                            chain == "solana"
+                            chain in self.target_chains
                             and token_addr
                             and isinstance(token_addr, str)
                             and token_addr not in seen_in_batch
@@ -415,7 +459,7 @@ class MatureTokenScanner:
                             if liq_usd < float(self.min_liquidity_usd) or liq_usd > float(self.max_liquidity_usd):
                                 continue
                             seen_in_batch.add(token_addr)
-                            found_candidates.append((token_addr, {"pair_data": p}))
+                            found_candidates.append((token_addr, {"pair_data": p, "chain": chain}))
         return found_candidates
 
     async def _query_dexscreener_pairs_batch(
@@ -435,7 +479,7 @@ class MatureTokenScanner:
             payload = await self._http_get_json(url)
             if isinstance(payload, dict) and "pairs" in payload and isinstance(payload["pairs"], list):
                 for p in payload["pairs"]:
-                    if isinstance(p, dict) and str(p.get("chainId", "")).lower() == "solana":
+                    if isinstance(p, dict) and str(p.get("chainId", "")).lower() in self.target_chains:
                         base_token = p.get("baseToken", {})
                         addr = base_token.get("address") if isinstance(base_token, dict) else None
                         if addr and isinstance(addr, str):
@@ -460,8 +504,8 @@ class MatureTokenScanner:
                 await asyncio.sleep(0.3)
         return results
 
-    async def _fetch_dexscreener_candidates(self) -> list[str]:
-        """Coleta tokens na Solana listados em boosts, perfis e takeovers da DexScreener."""
+    async def _fetch_dexscreener_candidates(self) -> list[tuple[str, str]]:
+        """Coleta tokens listados em boosts, perfis e takeovers da DexScreener para as redes ativas."""
         endpoints = [
             "/token-boosts/latest/v1",
             "/token-boosts/top/v1",
@@ -471,27 +515,43 @@ class MatureTokenScanner:
         tasks = [self._http_get_json(f"{self.dexscreener_base_url}{ep}") for ep in endpoints]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
 
-        found_addresses: set[str] = set()
+        found_tokens: list[tuple[str, str]] = []
+        seen_in_call: set[str] = set()
         for res in responses:
             if isinstance(res, list):
                 for item in res:
                     if isinstance(item, dict):
                         chain = str(item.get("chainId", "")).lower()
                         token_addr = item.get("tokenAddress")
-                        if chain == "solana" and token_addr and isinstance(token_addr, str):
-                            found_addresses.add(token_addr)
-        return list(found_addresses)
+                        if (
+                            chain in self.target_chains
+                            and token_addr
+                            and isinstance(token_addr, str)
+                            and token_addr not in seen_in_call
+                        ):
+                            seen_in_call.add(token_addr)
+                            found_tokens.append((token_addr, chain))
+        return found_tokens
 
     async def _fetch_geckoterminal_candidates(
         self,
         pages: int = 1,
     ) -> list[tuple[str, dict[str, Any]]]:
-        """Consulta páginas de novas pools na Solana do GeckoTerminal usando crawler rotativo."""
+        """Consulta páginas de novas pools no GeckoTerminal usando crawler rotativo entre redes ativas."""
         pools_out: list[tuple[str, dict[str, Any]]] = []
-        target_page = self._gecko_pages_cycle[self._gecko_cycle_idx % len(self._gecko_pages_cycle)]
+        gecko_nets = [c for c in self.target_chains if c in ("solana", "base", "arbitrum", "bsc")]
+        gecko_nets = [
+            self.GECKO_NETWORK_MAP.get(c, c)
+            for c in self.target_chains
+            if c in self.GECKO_NETWORK_MAP or c in self.GECKO_NETWORK_MAP.values()
+        ]
+        if not gecko_nets:
+            gecko_nets = ["solana"]
+        target_network = gecko_nets[self._gecko_cycle_idx % len(gecko_nets)]
+        target_page = self._gecko_pages_cycle[(self._gecko_cycle_idx // len(gecko_nets)) % len(self._gecko_pages_cycle)]
         self._gecko_cycle_idx += 1
 
-        url = f"{self.geckoterminal_base_url}/api/v2/networks/solana/new_pools?page={target_page}"
+        url = f"{self.geckoterminal_base_url}/api/v2/networks/{target_network}/new_pools?page={target_page}"
         res = await self._http_get_json(url)
 
         if isinstance(res, dict) and "data" in res and isinstance(res["data"], list):
@@ -502,40 +562,65 @@ class MatureTokenScanner:
                     base_token_id = (
                         rel.get("base_token", {}).get("data", {}).get("id", "")
                     )
-                    if base_token_id.startswith("solana_"):
-                        raw_addr = base_token_id.replace("solana_", "")
-                        if self._is_candidate_needed(raw_addr):
-                            reserve_usd = attrs.get("reserve_in_usd")
-                            if reserve_usd is not None:
-                                try:
-                                    if float(reserve_usd) < float(self.min_liquidity_usd):
-                                        continue
-                                except (ValueError, TypeError):
-                                    pass
-                            hint = {
-                                "pool_created_at": attrs.get("pool_created_at"),
-                                "pool_address": attrs.get("address"),
-                                "reserve_usd": reserve_usd,
-                                "name": attrs.get("name"),
-                            }
-                            pools_out.append((raw_addr, hint))
+                    detected_net: str | None = None
+                    raw_addr: str = ""
+                    for prefix, net_name in self.GECKO_PREFIX_MAP.items():
+                        if base_token_id.startswith(prefix):
+                            raw_addr = base_token_id[len(prefix):]
+                            detected_net = net_name
+                            break
+
+                    if not detected_net or not raw_addr:
+                        prefix = f"{target_network}_"
+                        if base_token_id.startswith(prefix):
+                            raw_addr = base_token_id[len(prefix):]
+                            rev_map = {v: k for k, v in self.GECKO_NETWORK_MAP.items()}
+                            detected_net = rev_map.get(target_network, target_network)
+                        else:
+                            continue
+
+                    if self._is_candidate_needed(raw_addr):
+                        reserve_usd = attrs.get("reserve_in_usd")
+                        if reserve_usd is not None:
+                            try:
+                                if float(reserve_usd) < float(self.min_liquidity_usd):
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
+                        hint = {
+                            "chain": detected_net,
+                            "pool_created_at": attrs.get("pool_created_at"),
+                            "pool_address": attrs.get("address"),
+                            "reserve_usd": reserve_usd,
+                            "name": attrs.get("name"),
+                        }
+                        pools_out.append((raw_addr, hint))
                 except Exception as parse_err:
                     logger.debug("Erro ao parsear pool GeckoTerminal: %s", parse_err)
 
         return pools_out
 
     async def _fetch_geckoterminal_established_pools(self) -> list[tuple[str, dict[str, Any]]]:
-        """Consulta pools consolidadas e em tendência na Solana via GeckoTerminal rotacionando durações."""
+        """Consulta pools consolidadas e em tendência via GeckoTerminal rotacionando durações e redes."""
         pools_out: list[tuple[str, dict[str, Any]]] = []
-        target_page = self._established_pages_cycle[self._established_cycle_idx % len(self._established_pages_cycle)]
+        gecko_nets = [c for c in self.target_chains if c in ("solana", "base", "arbitrum", "bsc")]
+        gecko_nets = [
+            self.GECKO_NETWORK_MAP.get(c, c)
+            for c in self.target_chains
+            if c in self.GECKO_NETWORK_MAP or c in self.GECKO_NETWORK_MAP.values()
+        ]
+        if not gecko_nets:
+            gecko_nets = ["solana"]
+        target_network = gecko_nets[self._established_cycle_idx % len(gecko_nets)]
+        target_page = self._established_pages_cycle[(self._established_cycle_idx // len(gecko_nets)) % len(self._established_pages_cycle)]
         self._established_cycle_idx += 1
 
         durations = ["1h", "6h", "24h"]
         duration = durations[self._established_cycle_idx % len(durations)]
 
         endpoints = [
-            f"{self.geckoterminal_base_url}/api/v2/networks/solana/trending_pools?duration={duration}&page={target_page}",
-            f"{self.geckoterminal_base_url}/api/v2/networks/solana/pools?page={target_page}",
+            f"{self.geckoterminal_base_url}/api/v2/networks/{target_network}/trending_pools?duration={duration}&page={target_page}",
+            f"{self.geckoterminal_base_url}/api/v2/networks/{target_network}/pools?page={target_page}",
         ]
         tasks = [self._http_get_json(url) for url in endpoints]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
@@ -549,23 +634,39 @@ class MatureTokenScanner:
                         base_token_id = (
                             rel.get("base_token", {}).get("data", {}).get("id", "")
                         )
-                        if base_token_id.startswith("solana_"):
-                            raw_addr = base_token_id.replace("solana_", "")
-                            if self._is_candidate_needed(raw_addr):
-                                reserve_usd = attrs.get("reserve_in_usd")
-                                if reserve_usd is not None:
-                                    try:
-                                        if float(reserve_usd) < float(self.min_liquidity_usd):
-                                            continue
-                                    except (ValueError, TypeError):
-                                        pass
-                                hint = {
-                                    "pool_created_at": attrs.get("pool_created_at"),
-                                    "pool_address": attrs.get("address"),
-                                    "reserve_usd": reserve_usd,
-                                    "name": attrs.get("name"),
-                                }
-                                pools_out.append((raw_addr, hint))
+                        detected_net: str | None = None
+                        raw_addr: str = ""
+                        for prefix, net_name in self.GECKO_PREFIX_MAP.items():
+                            if base_token_id.startswith(prefix):
+                                raw_addr = base_token_id[len(prefix):]
+                                detected_net = net_name
+                                break
+
+                        if not detected_net or not raw_addr:
+                            prefix = f"{target_network}_"
+                            if base_token_id.startswith(prefix):
+                                raw_addr = base_token_id[len(prefix):]
+                                rev_map = {v: k for k, v in self.GECKO_NETWORK_MAP.items()}
+                                detected_net = rev_map.get(target_network, target_network)
+                            else:
+                                continue
+
+                        if self._is_candidate_needed(raw_addr):
+                            reserve_usd = attrs.get("reserve_in_usd")
+                            if reserve_usd is not None:
+                                try:
+                                    if float(reserve_usd) < float(self.min_liquidity_usd):
+                                        continue
+                                except (ValueError, TypeError):
+                                    pass
+                            hint = {
+                                "chain": detected_net,
+                                "pool_created_at": attrs.get("pool_created_at"),
+                                "pool_address": attrs.get("address"),
+                                "reserve_usd": reserve_usd,
+                                "name": attrs.get("name"),
+                            }
+                            pools_out.append((raw_addr, hint))
                     except Exception as parse_err:
                         logger.debug("Erro ao parsear pool consolidada GeckoTerminal: %s", parse_err)
 
@@ -677,21 +778,95 @@ class MatureTokenScanner:
             )
             return None, True
 
-        # Pré-filtro anti-impersonation: descarta clones falsos de SOL, USDC e USDT
-        OFFICIAL_CONTRACTS = {
-            "SOL": "So11111111111111111111111111111111111111112",
-            "WSOL": "So11111111111111111111111111111111111111112",
-            "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-            "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+        # Identificação de Chain
+        detected_chain = "solana"
+        if pair_data and pair_data.get("chainId"):
+            detected_chain = str(pair_data["chainId"]).lower()
+        elif hint.get("chain"):
+            detected_chain = str(hint["chain"]).lower()
+
+        # Pré-filtro anti-impersonation: descarta clones falsos de ativos nativos
+        OFFICIAL_NATIVE: dict[str, dict[str, str | tuple[str, ...]]] = {
+            "SOL": {"solana": "So11111111111111111111111111111111111111112"},
+            "WSOL": {"solana": "So11111111111111111111111111111111111111112"},
+            "ETH": {
+                "ethereum": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "base": "0x4200000000000000000000000000000000000006",
+                "arbitrum": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+                "optimism": "0x4200000000000000000000000000000000000006",
+                "blast": "0x4300000000000000000000000000000000000004",
+                "polygon": "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+                "bsc": "0x2170ed0880ac9a755fd29b2688956bd959f933f8",
+            },
+            "WETH": {
+                "ethereum": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "base": "0x4200000000000000000000000000000000000006",
+                "arbitrum": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+                "optimism": "0x4200000000000000000000000000000000000006",
+                "blast": "0x4300000000000000000000000000000000000004",
+                "polygon": "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+                "bsc": "0x2170ed0880ac9a755fd29b2688956bd959f933f8",
+            },
+            "BNB": {"bsc": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"},
+            "WBNB": {"bsc": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"},
+            "MATIC": {
+                "polygon": (
+                    "0x0000000000000000000000000000000000001010",
+                    "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+                )
+            },
+            "WMATIC": {"polygon": "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"},
+            "POL": {"polygon": "0x455e53cbb86018ac2b8092fdcd39d8444affc3f6"},
+            "AVAX": {"avalanche": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"},
+            "WAVAX": {"avalanche": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"},
+            "USDC": {
+                "solana": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "base": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "ethereum": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                "arbitrum": (
+                    "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+                    "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+                ),
+                "bsc": "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+                "polygon": (
+                    "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+                    "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+                ),
+                "avalanche": (
+                    "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+                    "0xa7d7079b0fead91f3e65f86e8915cb59c1a4c664",
+                ),
+                "optimism": "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+            },
+            "USDT": {
+                "solana": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+                "base": "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",
+                "ethereum": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+                "arbitrum": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+                "bsc": "0x55d398326f99059ff775485246999027b3197955",
+                "polygon": "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+                "avalanche": "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
+                "optimism": "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58",
+            },
         }
         sym_clean = str(symbol).upper().strip()
-        if sym_clean in OFFICIAL_CONTRACTS and token_address != OFFICIAL_CONTRACTS[sym_clean]:
-            logger.warning(
-                "🚨 [ANTI-IMPERSONATION] Token %s descartado: Impersonação fraudulenta de %s.",
-                token_address,
-                sym_clean,
-            )
-            return None, True
+        if sym_clean in OFFICIAL_NATIVE:
+            official_map = OFFICIAL_NATIVE[sym_clean]
+            if detected_chain in official_map:
+                expected_raw = official_map[detected_chain]
+                expected_addrs = (
+                    [expected_raw.lower()]
+                    if isinstance(expected_raw, str)
+                    else [a.lower() for a in expected_raw]
+                )
+                if token_address.lower() not in expected_addrs:
+                    logger.warning(
+                        "🚨 [ANTI-IMPERSONATION] Token %s descartado na chain %s: Impersonação fraudulenta de %s.",
+                        token_address,
+                        detected_chain,
+                        sym_clean,
+                    )
+                    return None, True
 
         # Pré-filtro de liquidez mínima e máxima (anti-fake CLMM e pools sem liquidez):
         if liquidity_usd < self.min_liquidity_usd or liquidity_usd > self.max_liquidity_usd:
@@ -723,8 +898,9 @@ class MatureTokenScanner:
             event_name = "MATURE_TOKEN_DETECTED"
 
         logger.info(
-            "%s Token: %s (%s) | Idade: %s [%s-%s] | DEX: %s | Liq: $%.2f",
+            "%s Token [%s]: %s (%s) | Idade: %s [%s-%s] | DEX: %s | Liq: $%.2f",
             tag,
+            detected_chain.upper(),
             label,
             token_address,
             age_desc,
@@ -735,6 +911,7 @@ class MatureTokenScanner:
             extra={
                 "event": event_name,
                 "token_address": token_address,
+                "chain": detected_chain,
                 "age_hours": round(age_hours, 2),
                 "liquidity_usd": str(liquidity_usd),
             },
@@ -742,7 +919,7 @@ class MatureTokenScanner:
 
         token = TokenMetadata(
             address=token_address,
-            chain="solana",
+            chain=detected_chain,
             dex=dex,
             pool_address=pool_address,
             initial_liquidity_usd=liquidity_usd,
@@ -812,22 +989,30 @@ class MatureTokenScanner:
                 len(self._maturing_tokens),
             )
 
-    async def _query_dexscreener_pair(self, token_address: str) -> dict[str, Any] | None:
+    async def _query_dexscreener_pair(
+        self,
+        token_address: str,
+        chain: str | None = None,
+    ) -> dict[str, Any] | None:
         """Consulta as pools ativas do token na DexScreener para obter o melhor par."""
         url = f"{self.dexscreener_base_url}/latest/dex/tokens/{token_address}"
         payload = await self._http_get_json(url)
         if isinstance(payload, dict):
             pairs = payload.get("pairs")
             if isinstance(pairs, list) and pairs:
-                # Seleciona o par com maior liquidez em USD
-                solana_pairs = [
+                # Seleciona o par com maior liquidez em USD respeitando a(s) chain(s) alvo
+                matched_pairs = [
                     p
                     for p in pairs
                     if isinstance(p, dict)
-                    and str(p.get("chainId", "")).lower() == "solana"
+                    and (
+                        str(p.get("chainId", "")).lower() == chain.lower()
+                        if chain
+                        else str(p.get("chainId", "")).lower() in self.target_chains
+                    )
                 ]
-                if solana_pairs:
-                    solana_pairs.sort(
+                if matched_pairs:
+                    matched_pairs.sort(
                         key=lambda p: float(
                             p.get("liquidity", {}).get("usd", 0.0)
                             if isinstance(p.get("liquidity"), dict)
@@ -835,7 +1020,7 @@ class MatureTokenScanner:
                         ),
                         reverse=True,
                     )
-                    return cast(dict[str, Any], solana_pairs[0])
+                    return cast(dict[str, Any], matched_pairs[0])
         return None
 
     def _sync_http_get_json(self, url: str, headers: dict[str, str]) -> Any:

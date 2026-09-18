@@ -301,6 +301,13 @@ class MarketDynamicsValidator:
                 )
                 return False, reason, metrics
 
+            if quote_symbol in ("ETH", "WETH") and 0.0 < pooled_quote < Decimal("1.0"):
+                reason = (
+                    f"Liquidez real do par em ETH esgotada/drenada: {pooled_quote:.3f} ETH "
+                    f"(piso seguro de mercado: 1.0 ETH)"
+                )
+                return False, reason, metrics
+
             # GATE E: ANTI-PREÇO CONGELADO / GRÁFICO BARCODE (WASH TRADING)
             if volume_1h >= Decimal("10000.0"):
                 if (

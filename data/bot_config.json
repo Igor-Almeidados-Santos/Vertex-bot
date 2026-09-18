@@ -1,8 +1,8 @@
 {
   "paper_buy_amount_usd": 1.0,
   "max_concurrent_positions": 50,
-  "wallet_balance_usd": 15.0,
-  "paper_initial_wallet_usd": 20.0,
+  "wallet_balance_usd": 10.0,
+  "paper_initial_wallet_usd": 10.0,
   "min_trade_amount_usd": 1.0,
   "max_token_age_hours": 720.0,
   "break_even_gain_pct": 100.0,

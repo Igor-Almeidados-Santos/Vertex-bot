@@ -4,6 +4,7 @@ import { useState } from "react";
 import { CheckCircle2, XCircle, ExternalLink, Search, Clock, Archive } from "lucide-react";
 import { PositionItem } from "@/types/bot";
 import { formatUSD, formatPct, shortenAddress, formatTimeAgo } from "@/lib/formatters";
+import { ChainBadge } from "@/components/ChainBadge";
 
 interface ClosedPositionsTabProps {
   positions: PositionItem[];
@@ -112,7 +113,8 @@ export function ClosedPositionsTab({ positions }: ClosedPositionsTabProps) {
                 const address = pos.token_address || pos.address || "";
                 const symbol = pos.symbol || pos.token_symbol || shortenAddress(address);
                 const name = pos.name && pos.name !== "N/A" ? pos.name : "";
-                const dexUrl = `https://dexscreener.com/solana/${address}`;
+                const chain = (pos.chain || "solana").toLowerCase();
+                const dexUrl = `https://dexscreener.com/${chain}/${address}`;
 
                 return (
                   <tr key={pos.id} className="hover:bg-surface-hover/50 transition-colors">
@@ -126,6 +128,7 @@ export function ClosedPositionsTab({ positions }: ClosedPositionsTabProps) {
                             ({name})
                           </span>
                         )}
+                        <ChainBadge chain={pos.chain} />
                         {address && (
                           <a
                             href={dexUrl}

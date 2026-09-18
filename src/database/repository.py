@@ -511,7 +511,7 @@ class PositionsRepository:
                p.highest_price_seen, p.break_even_triggered, p.trailing_stop_price,
                p.ratchet_tier, p.ratchet_floor_price,
                p.opened_at, p.closed_at,
-               t.symbol, t.name,
+               t.symbol, t.name, t.chain,
                (SELECT o.price FROM ordens_executadas o WHERE o.position_id = p.id AND o.order_type != 'BUY' ORDER BY o.id DESC LIMIT 1) as exit_price,
                (SELECT o.order_type FROM ordens_executadas o WHERE o.position_id = p.id AND o.order_type != 'BUY' ORDER BY o.id DESC LIMIT 1) as close_reason
         FROM posicoes p
@@ -527,6 +527,7 @@ class PositionsRepository:
             d = dict(r)
             d["address"] = d.get("token_address") or ""
             d["token_symbol"] = d.get("symbol") or ""
+            d["chain"] = d.get("chain") or "solana"
             positions.append(d)
         return positions
 
@@ -638,7 +639,7 @@ class OrdersRepository:
         query = """
         SELECT o.id, o.position_id, o.order_type, o.mode, o.price, o.amount, o.total_usd,
                o.tx_hash, o.fee_cost_usd, o.slippage_realized, o.notes, o.executed_at,
-               p.token_address, t.symbol, t.name
+               p.token_address, t.symbol, t.name, t.chain
         FROM ordens_executadas o
         LEFT JOIN posicoes p ON o.position_id = p.id
         LEFT JOIN tokens_catalogados t ON p.token_address = t.address
@@ -655,6 +656,7 @@ class OrdersRepository:
             d["amount_usd"] = d.get("total_usd") or 0.0
             d["timestamp"] = d.get("executed_at") or ""
             d["reason"] = d.get("notes") or ""
+            d["chain"] = d.get("chain") or "solana"
             orders.append(d)
         return orders
 
