@@ -41,6 +41,9 @@ class MarketDynamicsValidator:
         min_liquidity_to_volume_ratio: Decimal = Decimal("0.05"),
         min_unique_traders_24h: int = 15,
         max_parabolic_1h_gain_pct: Decimal = Decimal("250.0"),
+        max_24h_drop_pct: Decimal = Decimal("-35.0"),
+        max_6h_drop_pct: Decimal = Decimal("-20.0"),
+        max_1h_drop_pct: Decimal = Decimal("-15.0"),
     ) -> None:
         self.min_volume_1h_usd: Decimal = min_volume_1h_usd
         self.min_buy_ratio_5m_pct: Decimal = min_buy_ratio_5m_pct
@@ -56,6 +59,9 @@ class MarketDynamicsValidator:
         self.min_liquidity_to_volume_ratio: Decimal = min_liquidity_to_volume_ratio
         self.min_unique_traders_24h: int = min_unique_traders_24h
         self.max_parabolic_1h_gain_pct: Decimal = max_parabolic_1h_gain_pct
+        self.max_24h_drop_pct: Decimal = max_24h_drop_pct
+        self.max_6h_drop_pct: Decimal = max_6h_drop_pct
+        self.max_1h_drop_pct: Decimal = max_1h_drop_pct
 
     def extract_metrics(self, token: TokenMetadata) -> dict[str, Any]:
         """Extrai e normaliza as métricas de mercado a partir do token e de seus metadados brutos."""
@@ -105,6 +111,7 @@ class MarketDynamicsValidator:
         pc_dict = pair_data.get("priceChange", {}) if isinstance(pair_data.get("priceChange"), dict) else {}
         price_change_5m = Decimal(str(pc_dict.get("m5") or 0.0))
         price_change_1h = Decimal(str(pc_dict.get("h1") or 0.0))
+        price_change_6h = Decimal(str(pc_dict.get("h6") or 0.0))
         price_change_24h = Decimal(str(pc_dict.get("h24") or 0.0))
 
         # 4. Transações de compra e venda (5m e 24h)
@@ -132,12 +139,13 @@ class MarketDynamicsValidator:
         if total_traders <= 0 and (buyers > 0 or sellers > 0):
             total_traders = max(buyers, sellers)
 
-        # 6. Liquidez USD e saldos do par
+        # 6. Liquidez USD e saldos do par em tempo real
         liq_dict = pair_data.get("liquidity", {}) if isinstance(pair_data.get("liquidity"), dict) else {}
         pair_liq = Decimal(str(liq_dict.get("usd") or 0.0))
         pooled_quote = Decimal(str(liq_dict.get("quote") or 0.0))
         pooled_base = Decimal(str(liq_dict.get("base") or 0.0))
-        liquidity_usd = max(token.initial_liquidity_usd, pair_liq)
+        # Se houver dados de liquidez na pool, utiliza a liquidez real da DEX (impede mascarar liquidez drenada)
+        liquidity_usd = pair_liq if pair_liq > Decimal("0.0") else token.initial_liquidity_usd
 
         # 7. Identificação dos tokens do par
         base_token = pair_data.get("baseToken", {}) if isinstance(pair_data.get("baseToken"), dict) else {}
@@ -172,6 +180,7 @@ class MarketDynamicsValidator:
             "volume_24h_usd": volume_24h,
             "price_change_5m_pct": price_change_5m,
             "price_change_1h_pct": price_change_1h,
+            "price_change_6h_pct": price_change_6h,
             "price_change_24h_pct": price_change_24h,
             "buys_5m": buys_5m,
             "sells_5m": sells_5m,
@@ -218,6 +227,7 @@ class MarketDynamicsValidator:
         volume_24h = metrics["volume_24h_usd"]
         price_change_5m = metrics["price_change_5m_pct"]
         price_change_1h = metrics["price_change_1h_pct"]
+        price_change_6h = metrics["price_change_6h_pct"]
         price_change_24h = metrics["price_change_24h_pct"]
         total_txns_5m = metrics["total_txns_5m"]
         buy_ratio_5m = metrics["buy_ratio_5m_pct"]
@@ -371,6 +381,30 @@ class MarketDynamicsValidator:
                 reason = (
                     f"Pressão vendedora dominante: compras representam apenas {buy_ratio_5m:.1f}% "
                     f"das transações em 5m (< {self.min_buy_ratio_5m_pct:.1f}%)"
+                )
+                return False, reason, metrics
+
+            # GATE M: ANTI-POST-PUMP CLIFF (QUEDA LIVRE EM 24H)
+            if price_change_24h < self.max_24h_drop_pct:
+                reason = (
+                    f"Colapso pós-pump / Faca caindo em 24h: variação de {price_change_24h:.1f}% "
+                    f"abaixo do limite seguro ({self.max_24h_drop_pct:.1f}%)"
+                )
+                return False, reason, metrics
+
+            # GATE N: ANTI-DUMP EM 6H
+            if price_change_6h < self.max_6h_drop_pct:
+                reason = (
+                    f"Tendência severa de baixa em 6h: variação de {price_change_6h:.1f}% "
+                    f"abaixo do limite seguro ({self.max_6h_drop_pct:.1f}%)"
+                )
+                return False, reason, metrics
+
+            # GATE O: ANTI-DUMP ABRUPTO EM 1H
+            if price_change_1h < self.max_1h_drop_pct:
+                reason = (
+                    f"Despejo abrupto em 1h: variação de {price_change_1h:.1f}% "
+                    f"abaixo do limite seguro ({self.max_1h_drop_pct:.1f}%)"
                 )
                 return False, reason, metrics
 

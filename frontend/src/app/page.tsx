@@ -21,6 +21,7 @@ import { OrdersTab } from "@/components/tabs/OrdersTab";
 import { TradeHistoryTab } from "@/components/tabs/TradeHistoryTab";
 import { TokenCatalogTab } from "@/components/tabs/TokenCatalogTab";
 import { RejectionsTab } from "@/components/tabs/RejectionsTab";
+import { IncubatorTab } from "@/components/tabs/IncubatorTab";
 import { SystemLogsTab } from "@/components/tabs/SystemLogsTab";
 import { RealDashboardView } from "@/components/views/RealDashboardView";
 import { StrategiesView } from "@/components/views/StrategiesView";
@@ -29,7 +30,7 @@ import { ConfigModal } from "@/components/modals/ConfigModal";
 import { RestartModal } from "@/components/modals/RestartModal";
 
 type SimSubTab = "OPEN_POSITIONS" | "CLOSED_POSITIONS" | "WAITING_QUEUE" | "ORDERS";
-type TokensSubTab = "CATALOG" | "REJECTIONS";
+type TokensSubTab = "CATALOG" | "REJECTIONS" | "INCUBATOR";
 
 export default function DashboardPage() {
   const {
@@ -268,10 +269,27 @@ export default function DashboardPage() {
                   <ShieldAlert className="w-4 h-4" />
                   <span>Auditoria de Rejeições (Hard Gates)</span>
                 </button>
+                <button
+                  onClick={() => setTokensSubTab("INCUBATOR")}
+                  className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
+                    tokensSubTab === "INCUBATOR"
+                      ? "bg-sky-600 text-white"
+                      : "text-gray-400 hover:text-white hover:bg-surface-card"
+                  }`}
+                >
+                  <Clock className="w-4 h-4" />
+                  <span>Tokens na Incubadora</span>
+                  {waitingTokens.length > 0 && (
+                    <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-sky-500/20 text-sky-300 font-bold border border-sky-500/40">
+                      {waitingTokens.length}
+                    </span>
+                  )}
+                </button>
               </div>
 
               {tokensSubTab === "CATALOG" && <TokenCatalogTab />}
               {tokensSubTab === "REJECTIONS" && <RejectionsTab />}
+              {tokensSubTab === "INCUBATOR" && <IncubatorTab waitingTokens={waitingTokens} />}
             </div>
           )}
 

@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     SWING_TRAILING_DROP_PCT: Decimal = Decimal("25.0") # Trailing stop elástico (-25%)
     MAX_SCALP_POSITIONS: int = 3
     MAX_SWING_POSITIONS: int = 3
+    MAX_POSITIONS_PER_TOKEN: int = 2
+    SCALE_IN_MIN_PROFIT_PCT: Decimal = Decimal("5.0")
 
     # === PARÂMETROS DE DINÂMICA DE MERCADO (ANTI-DUMP & SELEÇÃO) ===
     MIN_TOKEN_AGE_HOURS_SCALP: float = 2.0   # Mínimo 2 horas para Scalp (supera a zona de cascata de snipers)

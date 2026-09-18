@@ -156,3 +156,115 @@ def test_update_config_and_clear_history() -> None:
 
     manager.clear_history()
     assert len(manager._exit_records) == 0
+
+
+def test_immediate_reentry_for_winner() -> None:
+    """Trades vencedores (PnL > 0) devem ter reentrada IMEDIATA sem sofrer cool-off temporal."""
+    manager = ReentryRiskManager(trailing_cooloff_sec=300.0)
+    base_time = 1000.0
+    manager.record_exit(
+        token_address="WINNING_TOKEN",
+        exit_price=Decimal("2.50"),
+        exit_reason="TRAILING_STOP",
+        realized_pnl=Decimal("1.50"),
+        is_winner=True,
+        timestamp=base_time,
+    )
+
+    # Apenas 5 segundos depois -> reentrada deve ser APROVADA imediatamente!
+    allowed, reason = manager.can_reenter(
+        token_address="WINNING_TOKEN",
+        current_price=Decimal("2.48"),
+        current_liquidity_usd=Decimal("25000.0"),
+        now=base_time + 5.0,
+    )
+    assert allowed is True
+    assert "Reentrada imediata liberada" in reason
+
+
+def test_can_scale_in_pyramiding() -> None:
+    """Verifica autorização de piramidação (scale-in) apenas para posições lucrativas."""
+    from unittest.mock import MagicMock
+
+    manager = ReentryRiskManager()
+
+    # 1. Posição no prejuízo -> piramidação rejeitada
+    losing_pos = MagicMock()
+    losing_pos.roi_pct = Decimal("-2.5")
+    losing_pos.break_even_triggered = False
+
+    allowed, reason = manager.can_scale_in(
+        token_address="TOKEN_SCALE",
+        active_positions_for_token=[losing_pos],
+        max_positions_per_token=2,
+        min_profit_pct=Decimal("5.0"),
+    )
+    assert allowed is False
+    assert "lucro mínimo para piramidação" in reason
+
+    # 2. Posição no lucro (+8.0%) -> piramidação autorizada
+    winning_pos = MagicMock()
+    winning_pos.roi_pct = Decimal("8.0")
+    winning_pos.break_even_triggered = True
+
+    allowed, reason = manager.can_scale_in(
+        token_address="TOKEN_SCALE",
+        active_positions_for_token=[winning_pos],
+        max_positions_per_token=2,
+        min_profit_pct=Decimal("5.0"),
+    )
+    assert allowed is True
+    assert "Piramidação autorizada" in reason
+
+    # 3. Limite de posições atingido (2/2) -> rejeitado
+    allowed, reason = manager.can_scale_in(
+        token_address="TOKEN_SCALE",
+        active_positions_for_token=[winning_pos, winning_pos],
+        max_positions_per_token=2,
+        min_profit_pct=Decimal("5.0"),
+    )
+    assert allowed is False
+    assert "Limite máximo de posições" in reason
+
+
+def test_can_promote_to_swing() -> None:
+    """Verifica promoção automática de SCALP lucrativo para perna de SWING."""
+    from unittest.mock import MagicMock
+
+    manager = ReentryRiskManager()
+    scalp_pos = MagicMock()
+    scalp_pos.roi_pct = Decimal("12.5")
+    scalp_pos.break_even_triggered = True
+
+    # Sucesso na promoção
+    allowed, reason = manager.can_promote_to_swing(
+        scalp_pos=scalp_pos,
+        token_age_hours=4.5,
+        liquidity_usd=Decimal("35000.0"),
+        min_age_swing=3.0,
+        max_age_swing=6.0,
+        min_liquidity_swing=Decimal("20000.0"),
+        swing_slots_available=True,
+    )
+    assert allowed is True
+    assert "alta performance em Scalp" in reason
+
+    # Falha: Sem slots de Swing
+    allowed, reason = manager.can_promote_to_swing(
+        scalp_pos=scalp_pos,
+        token_age_hours=4.5,
+        liquidity_usd=Decimal("35000.0"),
+        swing_slots_available=False,
+    )
+    assert allowed is False
+    assert "Sem slots de Swing disponíveis" in reason
+
+    # Falha: Liquidez insuficiente para Swing (< $20k)
+    allowed, reason = manager.can_promote_to_swing(
+        scalp_pos=scalp_pos,
+        token_age_hours=4.5,
+        liquidity_usd=Decimal("12000.0"),
+        swing_slots_available=True,
+    )
+    assert allowed is False
+    assert "Liquidez atual" in reason

@@ -852,6 +852,7 @@ def create_dashboard_app(db: DatabaseManager, orchestrator: Any | None = None) -
     app.router.add_get("/api/orders", server.handle_orders)
     app.router.add_get("/api/tokens", server.handle_tokens)
     app.router.add_get("/api/waiting_tokens", server.handle_waiting_tokens)
+    app.router.add_get("/api/waiting-tokens", server.handle_waiting_tokens)
 
     # Rotas de controle operacional e configurações
     app.router.add_get("/api/bot/status", server.handle_bot_status)

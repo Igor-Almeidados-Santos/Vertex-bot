@@ -639,7 +639,7 @@ class MatureTokenScanner:
         Retorna (TokenMetadata | None, is_permanent_rejection: bool).
         """
         pair_data = hint.get("pair_data")
-        if not pair_data and not hint.get("pool_created_at"):
+        if not pair_data:
             pair_data = await self._query_dexscreener_pair(token_address)
 
         now_utc = datetime.now(UTC)

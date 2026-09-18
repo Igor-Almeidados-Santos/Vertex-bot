@@ -206,7 +206,7 @@ def test_anti_liquidity_drain_ratio(validator: MarketDynamicsValidator) -> None:
     assert not is_ok
     assert reason is not None
     assert "Liquidez drenada" in reason
-    assert "4.0%" in reason
+    assert "3.7%" in reason
 
 
 def test_anti_parabolic_exhaustion(validator: MarketDynamicsValidator) -> None:

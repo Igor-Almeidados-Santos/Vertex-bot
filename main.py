@@ -1213,19 +1213,35 @@ class VertexBotOrchestrator:
 
         strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
 
-        # Verificação atômica de posições já abertas para o token
+        # Verificação atômica de posições já abertas para o token (Piramidação / Scale-In)
         active_positions = list(self.position_tracker.active_positions.values())
-        existing_addrs = {p.token_address for p in active_positions}
-        if token.address in existing_addrs:
+        existing_positions_for_token = [p for p in active_positions if p.token_address == token.address]
+        max_positions_per_token = int(getattr(self.settings, "MAX_POSITIONS_PER_TOKEN", 2))
+        min_scale_profit = Decimal(str(getattr(self.settings, "SCALE_IN_MIN_PROFIT_PCT", "5.0")))
+        if existing_positions_for_token:
+            can_scale, scale_reason = self.reentry_manager.can_scale_in(
+                token_address=token.address,
+                active_positions_for_token=existing_positions_for_token,
+                max_positions_per_token=max_positions_per_token,
+                min_profit_pct=min_scale_profit,
+            )
+            if not can_scale:
+                logger.info(
+                    "⏸️ [POSIÇÃO ATIVA EXISTENTE] Token %s (%s): %s Ignorando entrada duplicada.",
+                    token.symbol or "N/A",
+                    token.address,
+                    scale_reason,
+                )
+                if token.address in self.waiting_tokens:
+                    self.waiting_tokens.pop(token.address, None)
+                    self._save_waiting_tokens()
+                return
             logger.info(
-                "⏸️ [POSIÇÃO JÁ ABERTA] O token %s (%s) já possui posição ativa. Ignorando entrada duplicada.",
+                "📈 [PIRAMIDAÇÃO AUTORIZADA] Token %s (%s): %s",
                 token.symbol or "N/A",
                 token.address,
+                scale_reason,
             )
-            if token.address in self.waiting_tokens:
-                self.waiting_tokens.pop(token.address, None)
-                self._save_waiting_tokens()
-            return
 
         # Validação obrigatória de dinâmica de mercado se pair_data estiver presente
         if hasattr(self, "market_validator") and isinstance(token.raw_event, dict) and "pair_data" in token.raw_event:
@@ -1301,14 +1317,18 @@ class VertexBotOrchestrator:
 
         existing_strategies_for_token = {
             getattr(p, "strategy_type", "SCALP")
-            for p in active_positions
-            if p.token_address == token.address
+            for p in existing_positions_for_token
         }
-        if "SCALP" in existing_strategies_for_token and "SWING" in existing_strategies_for_token:
+        if (
+            "SCALP" in existing_strategies_for_token
+            and "SWING" in existing_strategies_for_token
+            and len(existing_positions_for_token) >= max_positions_per_token
+        ):
             logger.info(
-                "⏸️ [POSIÇÕES JÁ ABERTA] O token %s (%s) já possui posições ativas em ambas as estratégias.",
+                "⏸️ [POSIÇÕES JÁ ABERTA] O token %s (%s) já atingiu o teto de posições ativas (%d).",
                 token.symbol or "N/A",
                 token.address,
+                max_positions_per_token,
             )
             return
 
@@ -1322,15 +1342,17 @@ class VertexBotOrchestrator:
             max_scalp_slots = 0
             max_swing_slots = max_positions
 
+        has_scalp = "SCALP" in existing_strategies_for_token
+        has_swing = "SWING" in existing_strategies_for_token
         can_open_scalp = (
             eligible_scalp
-            and ("SCALP" not in existing_strategies_for_token)
+            and (not has_scalp or len(existing_positions_for_token) < max_positions_per_token)
             and (active_scalp < max_scalp_slots)
             and (active_count < max_positions)
         )
         can_open_swing = (
             eligible_swing
-            and ("SWING" not in existing_strategies_for_token)
+            and (not has_swing or len(existing_positions_for_token) < max_positions_per_token)
             and (active_swing < max_swing_slots)
             and (active_count < max_positions)
         )
@@ -1482,26 +1504,31 @@ class VertexBotOrchestrator:
             "🔄 [POSIÇÃO 100%% ENCERRADA] Registrando saída do token %s para monitoramento de reentrada segura.",
             position.token_address,
         )
-        # 1. Registra no ReentryRiskManager para ativar o cool-off e monitor de repique
+        # 1. Registra no PerformanceScalingManager para reentrada imediata (vencedor) ou quarentena (perda)
         exit_price = position.trailing_stop_price if position.trailing_stop_price > Decimal("0.0") else position.entry_price
         exit_reason = "TRAILING_STOP" if position.status.value == "CLOSED" else "EMERGENCY_STOP"
+        is_winner = (position.realized_pnl_usd > Decimal("0.0")) or position.break_even_triggered
         self.reentry_manager.record_exit(
             token_address=position.token_address,
             exit_price=exit_price,
             exit_reason=exit_reason,
+            realized_pnl=position.realized_pnl_usd,
+            is_winner=is_winner,
         )
 
-        # 2. Libera token nos caches de vistos dos scanners APENAS se tiver sido trade lucrativo com break-even
-        if position.break_even_triggered and position.realized_pnl_usd > Decimal("0.0"):
+        # 2. Libera token nos caches de vistos dos scanners se tiver sido trade lucrativo
+        if is_winner:
             if hasattr(self.scanner, "release_token"):
                 try:
                     self.scanner.release_token(position.token_address)
+                    logger.info("🚀 [REENTRADA IMEDIATA] Token %s liberado no scanner para recompras sem restrições.", position.token_address)
                 except Exception as exc:
                     logger.debug("Erro ao chamar release_token no scanner: %s", exc)
         else:
             logger.info(
-                "🛑 [ANTI-LOOP RECOMPRA] Token %s finalizou sem lucro expressivo. Mantido no cache de vistos para impedir recompras cíclicas.",
+                "🛑 [ANTI-LOOP RECOMPRA] Token %s finalizou sem lucro ($%.4f). Mantido no cache de vistos para impedir recompras cíclicas.",
                 position.token_address,
+                float(position.realized_pnl_usd),
             )
 
         # 3. Dispara verificação imediata da fila de espera para preencher o slot recém-liberado
@@ -1754,6 +1781,14 @@ class VertexBotOrchestrator:
                     except Exception:
                         pass
 
+        # Promoção automática de Scalp para Swing se posição estiver lucrativa
+        if pos.status.value == "OPEN" and getattr(pos, "strategy_type", "SCALP") == "SCALP":
+            if pos.break_even_triggered or pos.roi_pct >= Decimal("5.0"):
+                try:
+                    asyncio.create_task(self._evaluate_scalp_swing_promotion(pos))
+                except Exception:
+                    pass
+
         meta_getter = getattr(self.price_feed, "get_metadata", None)
         if callable(meta_getter):
             meta = meta_getter(pos.token_address)
@@ -1761,6 +1796,109 @@ class VertexBotOrchestrator:
                 sym, nm = meta
                 if sym or nm:
                     await self.tokens_repo.update_token_metadata(pos.token_address, sym, nm)
+
+    async def _evaluate_scalp_swing_promotion(self, pos: PositionState) -> None:
+        """
+        Avalia se uma posição SCALP lucrativa deve abrir automaticamente uma perna de SWING
+        para potencializar o retorno em ativos com forte tendência de alta.
+        """
+        strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+        if strat_mode not in ("DUAL", "SWING_ONLY"):
+            return
+
+        # Precisa estar lucrativo no SCALP (ROI >= +5% ou Break-Even ativo)
+        if not pos.break_even_triggered and pos.roi_pct < Decimal("5.0"):
+            return
+
+        # Verifica se o token já possui posição de SWING ativa
+        all_active = list(self.position_tracker.active_positions.values())
+        has_swing = any(
+            p.token_address == pos.token_address and getattr(p, "strategy_type", "SCALP") == "SWING"
+            for p in all_active
+        )
+        if has_swing:
+            return
+
+        # Verifica capacidade de slots de SWING
+        max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 10))
+        active_count = len(all_active)
+        if active_count >= max_positions:
+            return
+
+        max_swing_slots = max(1, max_positions // 2) if strat_mode == "DUAL" else max_positions
+        active_swing = sum(1 for p in all_active if getattr(p, "strategy_type", "SCALP") == "SWING")
+        if active_swing >= max_swing_slots:
+            return
+
+        # Dimensionamento de capital e saldo disponível
+        configured_buy = Decimal(str(getattr(self.settings, "PAPER_BUY_AMOUNT_USD", "1.0")))
+        min_trade = Decimal(str(getattr(self.settings, "MIN_TRADE_AMOUNT_USD", "1.0")))
+        buy_amount = configured_buy if configured_buy > Decimal("0.0") else min_trade
+        if self.execution_engine.balance_usd < buy_amount:
+            return
+
+        # Extrai métricas atualizadas do par para verificar liquidez e maturidade de Swing
+        pair_data = getattr(self.price_feed, "get_pair_data", lambda _: None)(pos.token_address)
+        liq_usd = Decimal(str(pair_data.get("liquidity", {}).get("usd") or 0.0)) if pair_data else Decimal("0.0")
+        if liq_usd <= Decimal("0.0"):
+            liq_usd = Decimal(str(getattr(self.settings, "MIN_LIQUIDITY_SWING_USD", "20000.0")))
+
+        age_hours: float | None = None
+        if pair_data and pair_data.get("pairCreatedAt"):
+            try:
+                c_ms = float(pair_data["pairCreatedAt"])
+                if c_ms > 0:
+                    now_ts = datetime.now(UTC).timestamp() * 1000.0
+                    age_hours = max(0.0, (now_ts - c_ms) / (1000.0 * 3600.0))
+            except Exception:
+                pass
+
+        min_age_swing = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0))
+        max_age_swing = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0))
+        min_liq_swing = Decimal(str(getattr(self.settings, "MIN_LIQUIDITY_SWING_USD", "20000.0")))
+
+        can_promote, reason = self.reentry_manager.can_promote_to_swing(
+            scalp_pos=pos,
+            token_age_hours=age_hours,
+            liquidity_usd=liq_usd,
+            min_age_swing=min_age_swing,
+            max_age_swing=max_age_swing,
+            min_liquidity_swing=min_liq_swing,
+            swing_slots_available=(active_swing < max_swing_slots),
+        )
+        if not can_promote:
+            return
+
+        token_meta = await self.tokens_repo.get_token_metadata_by_address(pos.token_address)
+        if not token_meta:
+            token_meta = TokenMetadata(
+                address=pos.token_address,
+                chain="solana",
+                dex="raydium",
+                initial_liquidity_usd=liq_usd,
+            )
+
+        logger.info(
+            "🚀 [PROMOÇÃO SCALP -> SWING] Token %s lucrativo (+%.2f%%). Abrindo posição complementar de SWING!",
+            token_meta.symbol or pos.token_address[:8],
+            float(pos.roi_pct),
+        )
+        try:
+            pos_swing = await self.execution_engine.execute_buy(
+                token_meta,
+                amount_usd=buy_amount,
+                strategy_type="SWING",
+            )
+            if pos_swing:
+                self.telemetry.record_trade_opened()
+                await self.position_tracker.register_position(pos_swing)
+                logger.info(
+                    "✅ [POSIÇÃO SWING ABERTA] Posição complementar criada para %s ($%.2f USD alocados).",
+                    token_meta.symbol or pos.token_address[:8],
+                    float(pos_swing.allocated_capital_usd),
+                )
+        except Exception as exc:
+            logger.error("Erro ao executar promoção automática para SWING no token %s: %s", pos.token_address, exc)
 
     async def _price_monitor_worker(self) -> None:
         """Monitora as cotações em tempo real das posições abertas para disparar saídas automatizadas."""
