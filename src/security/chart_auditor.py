@@ -264,11 +264,9 @@ class ChartHealthAuditor:
         if pair_data is None:
             pair_data = await self.fetch_fresh_dexscreener_pair(chain, token.address)
 
-        if not pair_data:
         if not pair_data or not isinstance(pair_data, dict):
             return False, "Pool não localizada na DexScreener no momento da pré-entrada", {}
 
-        liq_dict = pair_data.get("liquidity") if isinstance(pair_data.get("liquidity"), dict) else {}
         raw_liq = pair_data.get("liquidity")
         liq_dict: dict[str, Any] = raw_liq if isinstance(raw_liq, dict) else {}
         current_liq_usd = Decimal(str(liq_dict.get("usd") or 0.0))
@@ -292,9 +290,6 @@ class ChartHealthAuditor:
                 return False, reason, {"current_liquidity_usd": float(current_liq_usd)}
 
         # 3. Transações e Atividade Recente (Liveness Gate)
-        tx_dict = pair_data.get("txns") if isinstance(pair_data.get("txns"), dict) else {}
-        m5_dict = tx_dict.get("m5") if isinstance(tx_dict.get("m5"), dict) else {}
-        h1_dict = tx_dict.get("h1") if isinstance(tx_dict.get("h1"), dict) else {}
         raw_tx = pair_data.get("txns")
         tx_dict: dict[str, Any] = raw_tx if isinstance(raw_tx, dict) else {}
         raw_m5 = tx_dict.get("m5")
@@ -325,7 +320,6 @@ class ChartHealthAuditor:
             return False, reason, {"total_5m": total_5m, "total_1h": total_1h}
 
         # 4. Volume Mínimo de 1h
-        vol_dict = pair_data.get("volume") if isinstance(pair_data.get("volume"), dict) else {}
         raw_vol = pair_data.get("volume")
         vol_dict: dict[str, Any] = raw_vol if isinstance(raw_vol, dict) else {}
         volume_1h = Decimal(str(vol_dict.get("h1") or 0.0))
@@ -336,7 +330,6 @@ class ChartHealthAuditor:
             return False, reason, {"volume_1h": float(volume_1h)}
 
         # 5. Variação de Preço (Anti-Dump Recente)
-        pc_dict = pair_data.get("priceChange") if isinstance(pair_data.get("priceChange"), dict) else {}
         raw_pc = pair_data.get("priceChange")
         pc_dict: dict[str, Any] = raw_pc if isinstance(raw_pc, dict) else {}
         pc_5m = Decimal(str(pc_dict.get("m5") or 0.0))

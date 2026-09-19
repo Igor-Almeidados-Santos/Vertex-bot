@@ -1,23 +1,4 @@
 {
-  "TOKEN_WAITING_SWING": {
-    "address": "TOKEN_WAITING_SWING",
-    "token_address": "TOKEN_WAITING_SWING",
-    "symbol": "WAIT1",
-    "token_symbol": "WAIT1",
-    "name": "N/A",
-    "chain": "solana",
-    "dex": "raydium",
-    "eligible_strategy": "SWING",
-    "initial_liquidity_usd": 25000.0,
-    "liquidity_usd": 25000.0,
-    "waiting_reason": "AGUARDANDO_SLOT",
-    "reason_pending": "AGUARDANDO_SLOT",
-    "enqueued_at": "2026-09-19T14:40:13.378620+00:00",
-    "added_at": "2026-09-19T14:40:13.378620+00:00",
-    "last_price": null,
-    "age_hours": null,
-    "raw_event": {}
-  },
   "TOKEN_WAITING_SCALP": {
     "address": "TOKEN_WAITING_SCALP",
     "token_address": "TOKEN_WAITING_SCALP",
