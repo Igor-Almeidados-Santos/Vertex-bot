@@ -43,7 +43,7 @@ class EVMSecurityValidator:
         self,
         goplus_base_url: str = "https://api.gopluslabs.io/api/v1",
         max_tax_pct: Decimal = Decimal("3.0"),
-        timeout_seconds: float = 6.0,
+        timeout_seconds: float = 10.0,
     ) -> None:
         self.goplus_base_url: str = goplus_base_url.rstrip("/")
         self.max_tax_pct: Decimal = max_tax_pct
@@ -54,7 +54,11 @@ class EVMSecurityValidator:
         if HAS_AIOHTTP:
             if self._session is None or getattr(self._session, "closed", True):
                 timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
-                self._session = aiohttp.ClientSession(timeout=timeout, trust_env=True)
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                }
+                self._session = aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=True)
             return self._session
         return None
 
@@ -85,6 +89,7 @@ class EVMSecurityValidator:
             )
 
         # Consulta GoPlus Security API
+        # Consulta GoPlus Security API com tolerância a falhas e retentativa
         url = f"{self.goplus_base_url}/token_security/{chain_id}?contract_addresses={token_address}"
         data: dict[str, Any] = {}
         try:
@@ -100,11 +105,71 @@ class EVMSecurityValidator:
                             data = token_info
         except Exception as exc:
             logger.warning("Falha ao consultar GoPlus Security para token EVM %s (%s): %s", token_address, chain, exc)
+        failure_detail = "Laudo de segurança indisponível no provedor"
+
+        for attempt in range(2):
+            try:
+                session = await self._get_session()
+                if session:
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            payload = await resp.json()
+                            result = payload.get("result", {})
+                            # O resultado do GoPlus chaveia pelo endereço em minúsculas
+                            token_info = result.get(token_address.lower()) or result.get(token_address)
+                            if isinstance(token_info, dict) and token_info:
+                                data = token_info
+                                break
+                            else:
+                                failure_detail = f"Token ainda não indexado/analisado na base GoPlus para a rede {chain}"
+                                logger.info(
+                                    "ℹ️ [EVM SECURITY] GoPlus retornou laudo vazio para %s (%s). O contrato é novo ou ainda não foi indexado.",
+                                    token_address,
+                                    chain,
+                                )
+                                break
+                        elif resp.status in (429, 502, 503, 504):
+                            failure_detail = f"Provedor GoPlus retornou HTTP {resp.status} (instabilidade/rate limit)"
+                            logger.warning(
+                                "⚠️ [EVM SECURITY] GoPlus retornou HTTP %d para %s (%s). Tentativa %d/2.",
+                                resp.status,
+                                token_address,
+                                chain,
+                                attempt + 1,
+                            )
+                            if attempt == 0:
+                                await asyncio.sleep(1.0)
+                                continue
+                        else:
+                            failure_detail = f"Provedor GoPlus retornou HTTP {resp.status}"
+                            logger.warning(
+                                "⚠️ [EVM SECURITY] GoPlus retornou HTTP %d para %s (%s).",
+                                resp.status,
+                                token_address,
+                                chain,
+                            )
+                            break
+            except Exception as exc:
+                failure_detail = f"Falha de conexão/timeout com GoPlus: {exc}"
+                logger.warning(
+                    "Falha ao consultar GoPlus Security para token EVM %s (%s) na tentativa %d/2: %s",
+                    token_address,
+                    chain,
+                    attempt + 1,
+                    exc,
+                )
+                if attempt == 0:
+                    await asyncio.sleep(1.0)
 
         if not data:
             # Se não obtiver resposta da API de segurança, adota abordagem conservadora
-            logger.warning("🚨 [EVM SECURITY] Laudo indisponível para %s na rede %s. Rejeitando por precaução.", token_address, chain)
-            return False, f"Laudo de segurança EVM indisponível no provedor para a rede {chain}", {}
+            is_pending = "ainda não indexado" in failure_detail.lower() or "não analisado" in failure_detail.lower()
+            logger.warning("🚨 [EVM SECURITY] Laudo indisponível para %s na rede %s (%s). Rejeitando por precaução.", token_address, chain, failure_detail)
+            return (
+                False,
+                f"Laudo de segurança EVM indisponível para a rede {chain}: {failure_detail}",
+                {"is_indexing_pending": is_pending, "failure_detail": failure_detail},
+            )
 
         # 1. HARD GATE: Honeypot (impossibilidade de vender)
         is_honeypot = str(data.get("is_honeypot", "0")) == "1"

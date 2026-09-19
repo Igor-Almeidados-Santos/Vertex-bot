@@ -84,11 +84,13 @@ class VertexBotOrchestrator:
             strategy_mode=settings.TRADING_STRATEGY_MODE,
         )
 
-        # Auditor de Saúde Gráfica e Estrutura de Velas (Anti-Dump / 3 Velas Mínimas)
+        # Auditor de Saúde Gráfica e Estrutura de Velas (Anti-Dump / 3 Velas Mínimas de 1h)
         self.chart_auditor: ChartHealthAuditor = ChartHealthAuditor(
             geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
             dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
-            min_candles_required=int(getattr(settings, "MIN_CANDLES_REQUIRED", 3)),
+            min_candles_required=int(getattr(settings, "CHART_MIN_CANDLES", 3)),
+            candle_timeframe=str(getattr(settings, "CHART_CANDLE_TIMEFRAME", "hour")),
+            candle_aggregate=int(getattr(settings, "CHART_CANDLE_AGGREGATE", 1)),
             min_volume_1h_usd=Decimal(str(getattr(settings, "MIN_VOLUME_1H_USD", "3000.0"))),
             min_liquidity_usd=settings.MIN_LIQUIDITY_USD,
         )
@@ -930,6 +932,7 @@ class VertexBotOrchestrator:
         )
 
         while self.is_running:
+            token = None
             try:
                 token = await self.detection_queue.get()
                 self.telemetry.record_detection()
@@ -937,7 +940,6 @@ class VertexBotOrchestrator:
 
                 if self.is_paused:
                     logger.debug("⏸️ [BOT PAUSADO] Ignorando abertura de posição para token %s.", token.address)
-                    self.detection_queue.task_done()
                     continue
 
                 # Auditoria com os 6 Hard Gates
@@ -947,14 +949,28 @@ class VertexBotOrchestrator:
                     self.telemetry.record_approval()
                     await self._evaluate_and_execute_entry(token)
                 else:
-                    self.telemetry.record_rejection(audit.rejection_reason or "Desconhecido")
+                    is_pending = bool(audit.details.get("is_indexing_pending")) if isinstance(audit.details, dict) else False
+                    if is_pending and hasattr(self, "scanner") and hasattr(self.scanner, "incubate_token"):
+                        self.scanner.incubate_token(token, reason="AGUARDANDO_LAUDO_GOPLUS", wait_minutes=15.0)
+                        logger.info(
+                            "🍼 [INCUBADORA QUARENTENA] Token %s (%s) transferido para a incubadora aguardando laudo GoPlus.",
+                            token.symbol or token.address[:8],
+                            token.address,
+                        )
+                    else:
+                        self.telemetry.record_rejection(audit.rejection_reason or "Desconhecido")
 
-                self.detection_queue.task_done()
                 await asyncio.sleep(0.15)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.error("Erro inesperado no worker de segurança: %s", exc, exc_info=True)
+            finally:
+                if token is not None:
+                    try:
+                        self.detection_queue.task_done()
+                    except ValueError:
+                        pass
 
     def _sync_config_from_disk_if_present(self) -> None:
         """Sincroniza parâmetros de risco e execução diretamente de bot_config.json se disponível."""
@@ -1220,14 +1236,23 @@ class VertexBotOrchestrator:
 
                 token_meta = self._build_waiting_token_meta(item, price)
                 if hasattr(self, "chart_auditor") and self.chart_auditor is not None:
-                    is_chart_safe, chart_reason, _ = await self.chart_auditor.audit_token_pre_entry(token_meta)
+                    is_chart_safe, chart_reason, chart_details = await self.chart_auditor.audit_token_pre_entry(token_meta)
                     if not is_chart_safe:
-                        logger.warning(
-                            "🧹 [FILA DE ESPERA PURGADA] Token %s (%s) desqualificado e purgado: %s",
-                            token_meta.symbol or addr[:8],
-                            addr,
-                            chart_reason,
-                        )
+                        is_candles_insufficient = bool(chart_details.get("is_insufficient_candles")) if isinstance(chart_details, dict) else False
+                        if is_candles_insufficient and hasattr(self, "scanner") and hasattr(self.scanner, "incubate_token"):
+                            self.scanner.incubate_token(token_meta, reason="AGUARDANDO_3_VELAS_1H", wait_minutes=30.0)
+                            logger.info(
+                                "🍼 [FILA -> INCUBADORA] Token %s (%s) transferido para a incubadora aguardando 3 velas de 1h.",
+                                token_meta.symbol or addr[:8],
+                                addr,
+                            )
+                        else:
+                            logger.warning(
+                                "🧹 [FILA DE ESPERA PURGADA] Token %s (%s) desqualificado e purgado: %s",
+                                token_meta.symbol or addr[:8],
+                                addr,
+                                chart_reason,
+                            )
                         self.waiting_tokens.pop(addr, None)
                         self._save_waiting_tokens()
                         continue
@@ -1295,47 +1320,77 @@ class VertexBotOrchestrator:
 
         # Auditoria estrutural de velas e integridade gráfica pré-entrada (Last-Second Gate)
         if hasattr(self, "chart_auditor") and self.chart_auditor is not None:
-            is_chart_safe, chart_reason, _ = await self.chart_auditor.audit_token_pre_entry(token)
+            is_chart_safe, chart_reason, chart_details = await self.chart_auditor.audit_token_pre_entry(token)
             if not is_chart_safe:
-                logger.warning(
-                    "🚫 [AUDITORIA GRÁFICA / PRÉ-ENTRADA REPROVADA] Token %s (%s): %s. Entrada cancelada.",
-                    token.symbol or token.address[:8],
-                    token.address,
-                    chart_reason,
-                )
+                is_candles_insufficient = bool(chart_details.get("is_insufficient_candles")) if isinstance(chart_details, dict) else False
+                if is_candles_insufficient and hasattr(self, "scanner") and hasattr(self.scanner, "incubate_token"):
+                    self.scanner.incubate_token(token, reason="AGUARDANDO_3_VELAS_1H", wait_minutes=30.0)
+                    logger.info(
+                        "🍼 [INCUBADORA QUARENTENA] Token %s (%s) transferido para a incubadora aguardando 3 velas de 1h.",
+                        token.symbol or token.address[:8],
+                        token.address,
+                    )
+                else:
+                    logger.warning(
+                        "🚫 [AUDITORIA GRÁFICA / PRÉ-ENTRADA REPROVADA] Token %s (%s): %s. Entrada cancelada.",
+                        token.symbol or token.address[:8],
+                        token.address,
+                        chart_reason,
+                    )
                 if token.address in self.waiting_tokens:
                     self.waiting_tokens.pop(token.address, None)
                     self._save_waiting_tokens()
                 return
 
-        # 1. Validação estrita de idade do token no mercado (Scalp: 2h-720h, Swing: 3h-6h)
+        # 1. Validação estrita de idade do token no mercado (Scalp: 3h-720h, Swing: 3h-6h)
         strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
         if strat_mode == "SWING_ONLY":
             min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SWING", 3.0))
             max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0))
         elif strat_mode == "SCALP_ONLY":
-            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0))
+            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 3.0))
             max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
         else:
-            # No modo DUAL, aceita tokens dentro da janela ampla de Scalp (2.0h a 720h)
-            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 2.0))
+            # No modo DUAL, aceita tokens dentro da janela ampla de Scalp (3.0h a 720h)
+            min_age_hours = float(getattr(self.settings, "MIN_TOKEN_AGE_HOURS_SCALP", 3.0))
             max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
 
         token_age = self._extract_token_age_hours(token)
-        if token_age is not None and (token_age < min_age_hours or token_age > max_age_hours):
-            logger.warning(
-                "⌛ [IDADE FORA DA JANELA] Token %s (%s) possui %.2fh de mercado (janela permitida: %.1fh a %.1fh no modo %s). Entrada descartada.",
-                token.symbol or "N/A",
-                token.address,
-                token_age,
-                min_age_hours,
-                max_age_hours,
-                strat_mode,
-            )
-            if token.address in self.waiting_tokens:
-                self.waiting_tokens.pop(token.address, None)
-                self._save_waiting_tokens()
-            return
+        if token_age is not None:
+            if token_age < min_age_hours:
+                if hasattr(self, "scanner") and hasattr(self.scanner, "incubate_token"):
+                    self.scanner.incubate_token(token, reason="AGUARDANDO_3_VELAS_1H", wait_minutes=30.0)
+                    logger.info(
+                        "🍼 [INCUBADORA QUARENTENA] Token %s (%s) possui apenas %.1fh de mercado (mínimo: %.1fh). Transferido para incubadora.",
+                        token.symbol or token.address[:8],
+                        token.address,
+                        token_age,
+                        min_age_hours,
+                    )
+                else:
+                    logger.warning(
+                        "⌛ [IDADE INSUFICIENTE] Token %s (%s) possui %.2fh de mercado (mínimo: %.1fh). Entrada descartada.",
+                        token.symbol or "N/A",
+                        token.address,
+                        token_age,
+                        min_age_hours,
+                    )
+                if token.address in self.waiting_tokens:
+                    self.waiting_tokens.pop(token.address, None)
+                    self._save_waiting_tokens()
+                return
+            elif token_age > max_age_hours:
+                logger.warning(
+                    "⌛ [IDADE EXPIRADA] Token %s (%s) possui %.2fh de mercado (máximo: %.1fh). Entrada descartada.",
+                    token.symbol or "N/A",
+                    token.address,
+                    token_age,
+                    max_age_hours,
+                )
+                if token.address in self.waiting_tokens:
+                    self.waiting_tokens.pop(token.address, None)
+                    self._save_waiting_tokens()
+                return
 
         # 2. Determina elegibilidade de cada perna da estratégia de forma estrita e isolada
         metrics = self.market_validator.extract_metrics(token) if hasattr(self, "market_validator") else {}

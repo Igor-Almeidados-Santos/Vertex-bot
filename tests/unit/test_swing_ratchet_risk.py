@@ -288,6 +288,8 @@ async def test_dual_mode_scalp_only_for_young_token(tmp_path: Path) -> None:
         PAPER_INITIAL_WALLET_USD=Decimal("50.0"),
         PAPER_BUY_AMOUNT_USD=Decimal("2.00"),
         MAX_CONCURRENT_POSITIONS=10,
+        MIN_TOKEN_AGE_HOURS_SCALP=2.0,
+        MIN_TOKEN_AGE_HOURS_SWING=3.0,
     )
     orch = VertexBotOrchestrator(settings)
     orch.execution_engine.balance_usd = Decimal("50.00")

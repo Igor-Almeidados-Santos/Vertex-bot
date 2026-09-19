@@ -60,7 +60,7 @@ class MatureTokenScanner:
     def __init__(
         self,
         detection_queue: asyncio.Queue[TokenMetadata],
-        min_age_hours: float = 2.0,
+        min_age_hours: float = 3.0,
         max_age_hours: float = 720.0,
         min_age_hours_swing: float = 3.0,
         max_age_hours_swing: float = 6.0,
@@ -187,13 +187,65 @@ class MatureTokenScanner:
             token_addr,
         )
 
+    def incubate_token(
+        self,
+        token: TokenMetadata,
+        reason: str = "AGUARDANDO_3_VELAS_1H",
+        wait_minutes: float = 30.0,
+    ) -> None:
+        """
+        Recebe um token com dados provisoriamente insuficientes (ex: menos de 3 velas de 1h
+        ou laudo GoPlus ainda não indexado) e o mantém na incubadora para reauditoria.
+        """
+        addr = token.address
+        if addr in self._permanently_rejected:
+            return
+
+        now_utc = datetime.now(UTC)
+        now_ms = int(now_utc.timestamp() * 1000)
+
+        token_age_h = 0.0
+        if isinstance(token.raw_event, dict):
+            token_age_h = float(token.raw_event.get("age_hours") or 0.0)
+
+        created_ms = int(now_ms - (token_age_h * 3600.0 * 1000.0))
+        if created_ms <= 0:
+            created_ms = now_ms
+
+        hint: dict[str, Any] = {
+            "symbol": token.symbol,
+            "name": token.name,
+            "chain": token.chain,
+            "liquidity_usd": float(token.initial_liquidity_usd),
+            "waiting_reason": reason,
+        }
+        if isinstance(token.raw_event, dict) and "pair_data" in token.raw_event:
+            hint["pair_data"] = token.raw_event["pair_data"]
+
+        self._maturing_tokens[addr] = {
+            "created_at_ms": created_ms,
+            "hint": hint,
+            "pair_data": hint.get("pair_data"),
+            "waiting_reason": reason,
+            "reincubated_at": now_ms,
+        }
+        self._seen_addresses.discard(addr)
+        self._seen_scalp.discard(addr)
+        self._save_incubator_tokens_file()
+        logger.info(
+            "🍼 [INCUBADORA QUARENTENA] Token %s (%s) mantido na incubadora: %s.",
+            token.symbol or addr[:8],
+            addr,
+            reason,
+        )
+
     def get_incubator_tokens(self) -> list[dict[str, Any]]:
         """Retorna todos os tokens atualmente em maturação (Scalp e Swing) formatados para o Dashboard."""
         now_utc = datetime.now(UTC)
         now_ms = int(now_utc.timestamp() * 1000)
         items: list[dict[str, Any]] = []
 
-        # 1. Tokens na incubadora de Scalp (Anti-Dump de novos lançamentos / graduações)
+        # 1. Tokens na incubadora de Scalp (Anti-Dump de novos lançamentos / graduações / velas)
         for addr, data in list(self._maturing_tokens.items()):
             created_ms = int(data.get("created_at_ms") or now_ms)
             age_h = max(0.0, (now_ms - created_ms) / (1000.0 * 3600.0))
@@ -210,8 +262,16 @@ class MatureTokenScanner:
             price = float(raw_p) if raw_p is not None else None
 
             enqueued_iso = datetime.fromtimestamp(created_ms / 1000.0, tz=UTC).isoformat()
-            target_min = self.min_age_hours * 60.0
-            cur_min = age_h * 60.0
+            waiting_reason = str(data.get("waiting_reason") or hint.get("waiting_reason") or "EM_MATURACAO_SCALP")
+
+            if waiting_reason == "AGUARDANDO_3_VELAS_1H":
+                reason_desc = f"Aguardando 3 Velas de 1h ({age_h:.1f}h / {self.min_age_hours:.1f}h)"
+            elif waiting_reason == "AGUARDANDO_LAUDO_GOPLUS":
+                reason_desc = f"Aguardando Laudo GoPlus ({age_h:.1f}h / {self.min_age_hours:.1f}h)"
+            elif "SCALP" in waiting_reason:
+                reason_desc = f"Em Maturação Scalp ({age_h:.1f}h / {self.min_age_hours:.1f}h)"
+            else:
+                reason_desc = f"Em Maturação 3 Velas ({age_h:.1f}h / {self.min_age_hours:.1f}h)"
 
             items.append({
                 "address": addr,
@@ -224,8 +284,8 @@ class MatureTokenScanner:
                 "eligible_strategy": "SCALP",
                 "initial_liquidity_usd": liq,
                 "liquidity_usd": liq,
-                "waiting_reason": "EM_MATURACAO_SCALP",
-                "reason_pending": f"Em Maturação Scalp ({cur_min:.0f}m / {target_min:.0f}m)",
+                "waiting_reason": waiting_reason,
+                "reason_pending": reason_desc,
                 "enqueued_at": enqueued_iso,
                 "added_at": enqueued_iso,
                 "last_price": price,

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # === PROVEDOR DE INGESTÃO (SCANNER) ===
     SCANNER_PROVIDER: Literal["MATURE_POOLS", "INDEXED", "RAW_RPC", "PUMPPORTAL", "HYBRID", "GRADUATIONS"] = "HYBRID"
-    MIN_TOKEN_AGE_HOURS: float = 2.0   # Mínimo 2 horas (elimina zona de morte e cascatas de snipers/devs)
+    MIN_TOKEN_AGE_HOURS: float = 3.0   # Mínimo 3 horas (permite consolidação e formação de 3 velas de 1h)
     MAX_TOKEN_AGE_HOURS: float = 720.0 # Até 720 horas (1 mês) para Scalp consolidado
     ENABLE_ESTABLISHED_POOLS: bool = True  # Ativa busca de pools consolidadas e trending
     MATURE_POOLS_POLL_INTERVAL_SEC: float = 5.0
@@ -98,10 +98,13 @@ class Settings(BaseSettings):
     SCALE_IN_MIN_PROFIT_PCT: Decimal = Decimal("5.0")
 
     # === PARÂMETROS DE DINÂMICA DE MERCADO (ANTI-DUMP & SELEÇÃO) ===
-    MIN_TOKEN_AGE_HOURS_SCALP: float = 2.0   # Mínimo 2 horas para Scalp (supera a zona de cascata de snipers)
+    MIN_TOKEN_AGE_HOURS_SCALP: float = 3.0   # Mínimo 3 horas para Scalp (3 velas de 1h fechadas)
     MAX_TOKEN_AGE_HOURS_SCALP: float = 720.0 # Até 720 horas (1 mês) para Scalp consolidado
     MIN_TOKEN_AGE_HOURS_SWING: float = 3.0   # Mínimo 3 horas de consolidação para Swing
     MAX_TOKEN_AGE_HOURS_SWING: float = 6.0   # Máximo 6 horas na entrada de Swing
+    CHART_CANDLE_TIMEFRAME: str = "hour"     # Timeframe da auditoria de velas (1 hora)
+    CHART_CANDLE_AGGREGATE: int = 1          # Agregação de 1 em 1 hora
+    CHART_MIN_CANDLES: int = 3               # Mínimo 3 velas fechadas no timeframe
     SWING_INCUBATOR_MIN_LIQUIDITY_USD: Decimal = Decimal("15000.0") # Piso de liquidez para manter token em incubação para Swing
     MIN_VOLUME_1H_USD: Decimal = Decimal("15000.0")  # Giro mínimo em 1h
     MIN_BUY_RATIO_5M_PCT: Decimal = Decimal("50.0")  # Ao menos 50% de compras em 5m

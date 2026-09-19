@@ -48,6 +48,8 @@ class ChartHealthAuditor:
         geckoterminal_base_url: str = "https://api.geckoterminal.com",
         dexscreener_base_url: str = "https://api.dexscreener.com",
         min_candles_required: int = 3,
+        candle_timeframe: str = "hour",
+        candle_aggregate: int = 1,
         min_volume_1h_usd: Decimal = Decimal("3000.0"),
         min_txns_5m: int = 2,
         min_txns_1h: int = 10,
@@ -55,11 +57,13 @@ class ChartHealthAuditor:
         max_5m_drop_pct: Decimal = Decimal("-10.0"),
         max_1h_drop_pct: Decimal = Decimal("-18.0"),
         max_24h_drop_pct: Decimal = Decimal("-45.0"),
-        timeout_seconds: float = 4.0,
+        timeout_seconds: float = 6.0,
     ) -> None:
         self.geckoterminal_base_url: str = geckoterminal_base_url.rstrip("/")
         self.dexscreener_base_url: str = dexscreener_base_url.rstrip("/")
         self.min_candles_required: int = min_candles_required
+        self.candle_timeframe: str = candle_timeframe
+        self.candle_aggregate: int = candle_aggregate
         self.min_volume_1h_usd: Decimal = min_volume_1h_usd
         self.min_txns_5m: int = min_txns_5m
         self.min_txns_1h: int = min_txns_1h
@@ -85,7 +89,10 @@ class ChartHealthAuditor:
 
     async def _http_get_json(self, url: str) -> dict[str, Any] | None:
         """Executa requisição GET HTTP resiliente com fallback síncrono."""
-        headers = {"User-Agent": "Vertex-bot/1.0", "Accept": "application/json"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
         try:
             if HAS_AIOHTTP:
                 session = await self._get_session()
@@ -110,21 +117,24 @@ class ChartHealthAuditor:
         self,
         chain: str,
         pool_address: str,
-        timeframe: str = "minute",
-        aggregate: int = 15,
+        timeframe: str | None = None,
+        aggregate: int | None = None,
         limit: int = 10,
         mock_candles: list[list[float]] | None = None,
     ) -> tuple[bool, str | None, dict[str, Any]]:
         """
         Consulta e audita o histórico de velas no GeckoTerminal.
-        Rejeita tokens que não possuem histórico mínimo de negociação ou cuja
-        formação represente pico e despejo imediato (Single-Spike & Dump).
+        Rejeita tokens que não possuem histórico mínimo de negociação (mínimo 3 velas de 1 hora)
+        ou cuja formação represente pico e despejo imediato (Single-Spike & Dump).
         """
+        tf = timeframe or self.candle_timeframe
+        agg = aggregate if aggregate is not None else self.candle_aggregate
+
         if mock_candles is not None:
             ohlcv_list = mock_candles
         else:
             net_id = self.GECKO_NETWORK_MAP.get(chain.lower().strip(), chain.lower().strip())
-            url = f"{self.geckoterminal_base_url}/api/v2/networks/{net_id}/pools/{pool_address}/ohlcv/{timeframe}?aggregate={aggregate}&limit={limit}"
+            url = f"{self.geckoterminal_base_url}/api/v2/networks/{net_id}/pools/{pool_address}/ohlcv/{tf}?aggregate={agg}&limit={limit}"
             data = await self._http_get_json(url)
             if not data or not isinstance(data.get("data"), dict):
                 return False, f"Histórico gráfico OHLCV indisponível no GeckoTerminal para o par {pool_address}", {}
@@ -138,13 +148,18 @@ class ChartHealthAuditor:
         details: dict[str, Any] = {
             "candle_count": candle_count,
             "candles_analyzed": candle_count,
+            "candle_timeframe": tf,
+            "candle_aggregate": agg,
+            "min_candles_required": self.min_candles_required,
         }
 
-        # 1. HARD GATE: Mínimo de 3 velas ativas fechadas
+        # 1. HARD GATE: Mínimo de 3 velas ativas fechadas (ex: 3 velas de 1h)
         if candle_count < self.min_candles_required:
+            details["is_insufficient_candles"] = True
+            unit_str = f"{agg}h" if tf == "hour" else f"{agg}m"
             reason = (
-                f"Histórico gráfico insuficiente: apenas {candle_count} vela(s) de negociação "
-                f"(mínimo exigido: {self.min_candles_required} velas fechadas) - Risco de Fake Pump em vela única"
+                f"Histórico gráfico insuficiente: apenas {candle_count} vela(s) de {unit_str} de negociação "
+                f"(mínimo exigido: {self.min_candles_required} velas fechadas de {unit_str}) - Aguardando maturação gráfica"
             )
             return False, reason, details
 
