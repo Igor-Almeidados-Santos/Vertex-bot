@@ -5,8 +5,11 @@ Testes Unitários para o Scanner de Tokens Maduros (Janela de 1h a 5h).
 import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
+
+import pytest
 
 from src.database.models import TokenMetadata
 from src.scanner.listener import create_scanner
@@ -414,5 +417,49 @@ async def test_mature_scanner_multichain_base_enrichment() -> None:
     assert token.symbol == "AEROCOIN"
     assert token.initial_liquidity_usd == Decimal("35000.0")
     assert is_perm is True
+
+
+@pytest.mark.asyncio
+async def test_get_incubator_tokens_and_persistence(tmp_path: Path) -> None:
+    """Valida exportação de tokens da incubadora e salvamento em JSON."""
+    queue: asyncio.Queue[TokenMetadata] = asyncio.Queue()
+    scanner = MatureTokenScanner(
+        detection_queue=queue,
+        min_age_hours=2.0,
+        max_age_hours=720.0,
+        min_age_hours_swing=3.0,
+        max_age_hours_swing=6.0,
+    )
+
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    created_ms = now_ms - int(0.5 * 3600 * 1000)  # 30 min atrás (< 2.0h -> Scalp incubadora)
+
+    scanner._register_maturing_candidate(
+        token_address="0x1111111111111111111111111111111111111111",
+        age_hours=0.5,
+        pair_data={
+            "chainId": "bsc",
+            "dexId": "pancakeswap_v3",
+            "liquidity": {"usd": 12000.0},
+            "priceUsd": "0.005",
+            "pairCreatedAt": created_ms,
+            "baseToken": {"symbol": "INCUB_TEST", "name": "Incubator Test"},
+        },
+        hint={"symbol": "INCUB_TEST", "name": "Incubator Test", "network": "bsc"},
+    )
+
+    tokens = scanner.get_incubator_tokens()
+    assert len(tokens) == 1
+    t = tokens[0]
+    assert t["address"] == "0x1111111111111111111111111111111111111111"
+    assert t["symbol"] == "INCUB_TEST"
+    assert t["chain"] == "bsc"
+    assert t["dex"] == "pancakeswap_v3"
+    assert t["initial_liquidity_usd"] == 12000.0
+    assert t["waiting_reason"] == "EM_MATURACAO_SCALP"
+    assert "Em Maturação Scalp" in t["reason_pending"]
+    assert t["eligible_strategy"] == "SCALP"
+    assert t["last_price"] == 0.005
+
 
 

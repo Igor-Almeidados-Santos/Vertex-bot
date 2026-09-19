@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from src.config.settings import Settings, get_settings
 from src.database.connection import DatabaseManager
@@ -1031,6 +1032,18 @@ class VertexBotOrchestrator:
             return age_from_ts
 
         return self._extract_age_from_raw_fields(token.raw_event, token.detection_timestamp, now_utc)
+
+    def get_incubator_tokens(self) -> list[dict[str, Any]]:
+        """Retorna tokens atualmente na incubadora de maturação através dos scanners ativos."""
+        if hasattr(self, "scanner") and self.scanner is not None:
+            if hasattr(self.scanner, "get_incubator_tokens"):
+                try:
+                    res = self.scanner.get_incubator_tokens()
+                    if isinstance(res, list):
+                        return cast(list[dict[str, Any]], res)
+                except Exception as exc:
+                    logger.debug("Falha ao consultar incubadora do scanner: %s", exc)
+        return []
 
     def _enqueue_waiting_token(
         self, token: TokenMetadata, reason: str, eligible_strategy: str = "DUAL"

@@ -188,43 +188,98 @@ class DashboardServer:
 
     def _get_waiting_tokens(self) -> list[dict[str, Any]]:
         """Retorna lista de tokens aprovados aguardando liberação de slots."""
+        """Retorna lista de tokens aprovados aguardando liberação de slots ou em maturação na incubadora."""
         raw_list: list[dict[str, Any]] = []
         if self.orchestrator:
             waiting = getattr(self.orchestrator, "waiting_tokens", None)
             if isinstance(waiting, dict):
                 raw_list = list(waiting.values())
         elif Path("data/waiting_tokens.json").exists():
+                raw_list.extend(list(waiting.values()))
+            if hasattr(self.orchestrator, "get_incubator_tokens"):
+                try:
+                    inc_tokens = self.orchestrator.get_incubator_tokens()
+                    if isinstance(inc_tokens, list):
+                        raw_list.extend(inc_tokens)
+                except Exception as exc:
+                    logger.debug("Erro ao coletar tokens da incubadora via orchestrator: %s", exc)
+        else:
+            if Path("data/waiting_tokens.json").exists():
+                try:
+                    raw = json.loads(Path("data/waiting_tokens.json").read_text(encoding="utf-8"))
+                    if isinstance(raw, dict):
+                        raw_list.extend(list(raw.values()))
+                except Exception:
+                    pass
+            if Path("data/incubator_tokens.json").exists():
+                try:
+                    inc_raw = json.loads(Path("data/incubator_tokens.json").read_text(encoding="utf-8"))
+                    if isinstance(inc_raw, list):
+                        raw_list.extend(inc_raw)
+                    elif isinstance(inc_raw, dict):
+                        raw_list.extend(list(inc_raw.values()))
+                except Exception:
+                    pass
+
+        # Fallback de leitura do arquivo data/incubator_tokens.json se orchestrator não retornou incubados
+        if Path("data/incubator_tokens.json").exists() and not any("MATURA" in str(x.get("waiting_reason", "")) for x in raw_list):
             try:
                 raw = json.loads(Path("data/waiting_tokens.json").read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
                     raw_list = list(raw.values())
+                inc_raw = json.loads(Path("data/incubator_tokens.json").read_text(encoding="utf-8"))
+                if isinstance(inc_raw, list):
+                    raw_list.extend(inc_raw)
+                elif isinstance(inc_raw, dict):
+                    raw_list.extend(list(inc_raw.values()))
             except Exception:
                 pass
 
         normalized: list[dict[str, Any]] = []
+        normalized_map: dict[str, dict[str, Any]] = {}
         for t in raw_list:
             item = dict(t)
             addr = str(item.get("address") or item.get("token_address") or "")
+            addr = str(item.get("address") or item.get("token_address") or "").strip()
+            if not addr:
+                continue
             sym = str(item.get("symbol") or item.get("token_symbol") or (addr[:8] if addr else "N/A"))
             name = str(item.get("name") or "N/A")
             liq = float(item.get("initial_liquidity_usd") or item.get("liquidity_usd") or 0.0)
+            chain = str(item.get("chain") or "solana").lower()
+            dex = str(item.get("dex") or "raydium")
+            liq = _safe_float(item.get("initial_liquidity_usd") or item.get("liquidity_usd"), 0.0)
             reason = str(item.get("waiting_reason") or item.get("reason_pending") or "AGUARDANDO_SLOT")
+            reason_pending = str(item.get("reason_pending") or reason)
             enq = str(item.get("enqueued_at") or item.get("added_at") or "")
+            age = _safe_float(item.get("age_hours"), 0.0) if item.get("age_hours") is not None else None
+            strat = str(item.get("eligible_strategy") or "DUAL")
+            last_p = _safe_float(item.get("last_price"), 0.0) if item.get("last_price") is not None else None
 
             item["address"] = addr
             item["token_address"] = addr
             item["symbol"] = sym
             item["token_symbol"] = sym
             item["name"] = name
+            item["chain"] = chain
+            item["dex"] = dex
             item["initial_liquidity_usd"] = liq
             item["liquidity_usd"] = liq
             item["waiting_reason"] = reason
             item["reason_pending"] = reason
+            item["reason_pending"] = reason_pending
             item["enqueued_at"] = enq
             item["added_at"] = enq
             normalized.append(item)
+            item["age_hours"] = age
+            item["eligible_strategy"] = strat
+            item["last_price"] = last_p
 
         return normalized
+            normalized_map[addr.lower()] = item
+
+        return list(normalized_map.values())
+
 
     def _get_active_settings(self) -> dict[str, Any]:
         """Retorna dicionário com os parâmetros ativos do bot."""

@@ -4,6 +4,7 @@ Rastreador Assíncrono do Ciclo de Vida das Posições (Finite State Machine).
 
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
+from typing import Any
 
 from src.database.models import PositionState, PositionStatus
 from src.database.repository import PositionsRepository

@@ -141,6 +141,7 @@ async def test_evaluate_and_execute_entry_respects_paper_buy_amount(
         orch.settings.PAPER_BUY_AMOUNT_USD = Decimal("3.50")
         orch.execution_engine.balance_usd = Decimal("20.00")
         orch.execution_engine.execute_buy = AsyncMock(return_value=None)  # type: ignore[method-assign]
+        orch.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
         token = TokenMetadata(
             address="SolTokenBuyTest1111111111111111111111111111",
@@ -171,6 +172,7 @@ async def test_evaluate_and_execute_entry_respects_max_concurrent_positions(
         orch.settings.MAX_CONCURRENT_POSITIONS = 1
         orch.execution_engine.balance_usd = Decimal("50.00")
         orch.execution_engine.execute_buy = AsyncMock(return_value=None)  # type: ignore[method-assign]
+        orch.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
         # Simula 1 posição já ativa
         mock_pos = PositionState(
@@ -235,6 +237,7 @@ async def test_evaluate_entry_rejects_tokens_older_than_max_age(
         orch.settings.TRADING_STRATEGY_MODE = "SWING_ONLY"  # type: ignore[assignment]
         orch.execution_engine.balance_usd = Decimal("50.00")
         orch.execution_engine.execute_buy = AsyncMock(return_value=None)  # type: ignore[method-assign]
+        orch.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
         # Token velho para Swing (6h de vida > 4.0h limite)
         old_token = TokenMetadata(

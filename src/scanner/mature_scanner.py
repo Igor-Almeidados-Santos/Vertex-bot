@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, cast
 
 try:
@@ -180,10 +181,110 @@ class MatureTokenScanner:
         self._maturing_tokens.pop(token_addr, None)
         self._maturing_swing_tokens.pop(token_addr, None)
         self._last_age_check.pop(token_addr, None)
+        self._save_incubator_tokens_file()
         logger.info(
             "🔄 [TOKEN LIBERADO PARA REANÁLISE] Endereço %s removido do cache de vistos do MatureTokenScanner.",
             token_addr,
         )
+
+    def get_incubator_tokens(self) -> list[dict[str, Any]]:
+        """Retorna todos os tokens atualmente em maturação (Scalp e Swing) formatados para o Dashboard."""
+        now_utc = datetime.now(UTC)
+        now_ms = int(now_utc.timestamp() * 1000)
+        items: list[dict[str, Any]] = []
+
+        # 1. Tokens na incubadora de Scalp (Anti-Dump de novos lançamentos / graduações)
+        for addr, data in list(self._maturing_tokens.items()):
+            created_ms = int(data.get("created_at_ms") or now_ms)
+            age_h = max(0.0, (now_ms - created_ms) / (1000.0 * 3600.0))
+            pair = data.get("pair_data") or {}
+            hint = data.get("hint") or {}
+            base = pair.get("baseToken") or {}
+
+            sym = str(base.get("symbol") or hint.get("symbol") or addr[:8])
+            name = str(base.get("name") or hint.get("name") or "N/A")
+            chain = str(pair.get("chainId") or hint.get("network") or hint.get("chain") or "solana").lower()
+            dex = str(pair.get("dexId") or hint.get("dex") or "raydium")
+            liq = float(pair.get("liquidity", {}).get("usd") or hint.get("liquidity_usd") or 0.0)
+            raw_p = pair.get("priceUsd")
+            price = float(raw_p) if raw_p is not None else None
+
+            enqueued_iso = datetime.fromtimestamp(created_ms / 1000.0, tz=UTC).isoformat()
+            target_min = self.min_age_hours * 60.0
+            cur_min = age_h * 60.0
+
+            items.append({
+                "address": addr,
+                "token_address": addr,
+                "symbol": sym,
+                "token_symbol": sym,
+                "name": name,
+                "chain": chain,
+                "dex": dex,
+                "eligible_strategy": "SCALP",
+                "initial_liquidity_usd": liq,
+                "liquidity_usd": liq,
+                "waiting_reason": "EM_MATURACAO_SCALP",
+                "reason_pending": f"Em Maturação Scalp ({cur_min:.0f}m / {target_min:.0f}m)",
+                "enqueued_at": enqueued_iso,
+                "added_at": enqueued_iso,
+                "last_price": price,
+                "age_hours": round(age_h, 2),
+                "raw_event": data,
+            })
+
+        # 2. Tokens na incubadora de Swing
+        for addr, data in list(self._maturing_swing_tokens.items()):
+            created_ms = int(data.get("created_at_ms") or now_ms)
+            age_h = max(0.0, (now_ms - created_ms) / (1000.0 * 3600.0))
+            pair = data.get("pair_data") or {}
+            hint = data.get("hint") or {}
+            base = pair.get("baseToken") or {}
+
+            sym = str(base.get("symbol") or hint.get("symbol") or addr[:8])
+            name = str(base.get("name") or hint.get("name") or "N/A")
+            chain = str(pair.get("chainId") or hint.get("network") or hint.get("chain") or "solana").lower()
+            dex = str(pair.get("dexId") or hint.get("dex") or "raydium")
+            liq = float(pair.get("liquidity", {}).get("usd") or hint.get("liquidity_usd") or 0.0)
+            raw_p = pair.get("priceUsd")
+            price = float(raw_p) if raw_p is not None else None
+
+            enqueued_iso = datetime.fromtimestamp(created_ms / 1000.0, tz=UTC).isoformat()
+
+            items.append({
+                "address": addr,
+                "token_address": addr,
+                "symbol": sym,
+                "token_symbol": sym,
+                "name": name,
+                "chain": chain,
+                "dex": dex,
+                "eligible_strategy": "SWING",
+                "initial_liquidity_usd": liq,
+                "liquidity_usd": liq,
+                "waiting_reason": "EM_MATURACAO_SWING",
+                "reason_pending": f"Em Maturação Swing ({age_h:.1f}h / {self.min_age_hours_swing:.1f}h)",
+                "enqueued_at": enqueued_iso,
+                "added_at": enqueued_iso,
+                "last_price": price,
+                "age_hours": round(age_h, 2),
+                "raw_event": data,
+            })
+
+        return items
+
+    def _save_incubator_tokens_file(self) -> None:
+        """Salva o estado atual da incubadora em data/incubator_tokens.json de forma atômica."""
+        try:
+            tokens = self.get_incubator_tokens()
+            inc_file = Path("data/incubator_tokens.json")
+            inc_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = inc_file.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+            tmp_path.replace(inc_file)
+        except Exception as exc:
+            logger.debug("Falha ao salvar data/incubator_tokens.json: %s", exc)
+
 
     def _is_candidate_needed(self, token_addr: str, now_sec: float | None = None) -> bool:
         """
@@ -247,6 +348,7 @@ class MatureTokenScanner:
                         "hint": hint,
                         "pair_data": token.raw_event.get("pair_data") if isinstance(token.raw_event, dict) else None,
                     }
+                    self._save_incubator_tokens_file()
                     logger.info(
                         "🔭 [INCUBADORA SWING] Token %s (Liq $%.0f, Idade %.1fh) monitorado para promoção aos %.1fh.",
                         token.symbol or token_addr[:8],
@@ -351,6 +453,8 @@ class MatureTokenScanner:
                 await self.detection_queue.put(token)
             elif is_permanent:
                 self._remember_seen_address(token_addr, stage="PERMANENT")
+
+        self._save_incubator_tokens_file()
 
     async def _poll_loop(self) -> None:
         """Loop contínuo consultando feeds da DexScreener e GeckoTerminal com pipeline de maturação."""
@@ -988,6 +1092,7 @@ class MatureTokenScanner:
                 age_hours * 60.0,
                 len(self._maturing_tokens),
             )
+        self._save_incubator_tokens_file()
 
     async def _query_dexscreener_pair(
         self,

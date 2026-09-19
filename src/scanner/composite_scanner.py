@@ -48,3 +48,15 @@ class CompositeScanner:
                     s.release_token(token_addr)
                 except Exception as exc:
                     logger.debug("Erro ao liberar token no sub-scanner %s: %s", type(s).__name__, exc)
+
+    def get_incubator_tokens(self) -> list[dict[str, Any]]:
+        """Consolida os tokens em incubação de todos os sub-scanners que possuem incubadora."""
+        results: list[dict[str, Any]] = []
+        for s in self.scanners:
+            if hasattr(s, "get_incubator_tokens"):
+                try:
+                    results.extend(s.get_incubator_tokens())
+                except Exception as exc:
+                    logger.debug("Erro ao coletar tokens da incubadora do sub-scanner %s: %s", type(s).__name__, exc)
+        return results
+

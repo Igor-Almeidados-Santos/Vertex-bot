@@ -91,6 +91,7 @@ class TelemetryCollector:
         logger.info(
             "=== RELATÓRIO DE TELEMETRIA LOCAL ===\n"
             "Tokens Detectados: %d | Aprovados: %d (%.1f%%) | Rejeitados: %d\n"
+            "Tokens Detectados: %d | Aprovados (Segurança): %d (%.1f%%) | Rejeitados (Hard Gates): %d\n"
             "Trades Abertos: %d | Fechados: %d | Win-Rate: %.1f%%\n"
             "Break-Evens Conquistados: %d\n"
             "PnL Total Realizado: $%.2f USD\n"

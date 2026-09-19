@@ -223,6 +223,7 @@ async def test_dual_track_entry_orchestration(tmp_path: Path) -> None:
     )
     orch = VertexBotOrchestrator(settings)
     orch.execution_engine.balance_usd = Decimal("50.00")
+    orch.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
     token = TokenMetadata(
         address="DualTrackBuyToken11111111111111111111111",
@@ -290,6 +291,7 @@ async def test_dual_mode_scalp_only_for_young_token(tmp_path: Path) -> None:
     )
     orch = VertexBotOrchestrator(settings)
     orch.execution_engine.balance_usd = Decimal("50.00")
+    orch.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
     token_ponk = TokenMetadata(
         address="PonkToken11111111111111111111111111111111111",
@@ -346,6 +348,7 @@ async def test_dual_mode_scalp_only_for_old_token(tmp_path: Path) -> None:
     )
     orch = VertexBotOrchestrator(settings)
     orch.execution_engine.balance_usd = Decimal("50.00")
+    orch.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
     token_old = TokenMetadata(
         address="OldToken111111111111111111111111111111111111",
@@ -395,6 +398,7 @@ async def test_dual_mode_swing_entry_when_scalp_slots_full(tmp_path: Path) -> No
     )
     orch = VertexBotOrchestrator(settings)
     orch.execution_engine.balance_usd = Decimal("50.00")
+    orch.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
     # Pré-ocupa todos os 5 slots de SCALP
     for i in range(5):

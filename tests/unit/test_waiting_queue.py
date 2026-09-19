@@ -51,6 +51,7 @@ async def test_strict_buy_amount_allocated(tmp_db_and_settings: tuple[DatabaseMa
     )
 
     await orchestrator.tokens_repo.save_detected_token(token)
+    orchestrator.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
     with patch.object(orchestrator.price_feed, "fetch_prices", new=AsyncMock(return_value={token.address: Decimal("1.0")})):
         await orchestrator._evaluate_and_execute_entry(token)
 
@@ -88,6 +89,7 @@ async def test_waiting_queue_enqueues_when_slots_full(
     )
     await orchestrator.tokens_repo.save_detected_token(token1)
     await orchestrator.tokens_repo.save_detected_token(token2)
+    orchestrator.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
     with patch.object(orchestrator.price_feed, "fetch_prices", new=AsyncMock(return_value={token1.address: Decimal("1.0"), token2.address: Decimal("2.0")})):
         # Entra no slot único disponível
@@ -133,6 +135,7 @@ async def test_waiting_queue_drained_when_slot_freed(
     )
     await orchestrator.tokens_repo.save_detected_token(token1)
     await orchestrator.tokens_repo.save_detected_token(token2)
+    orchestrator.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
     prices = {token1.address: Decimal("1.0"), token2.address: Decimal("1.5")}
 
@@ -192,4 +195,87 @@ async def test_waiting_tokens_api_endpoint(tmp_db_and_settings: tuple[DatabaseMa
         assert json_data["data"][0]["symbol"] == "WAIT1"
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_incubator_tokens_included_in_waiting_tokens_endpoint(
+    tmp_db_and_settings: tuple[DatabaseManager, Settings],
+) -> None:
+    """Verifica que tokens na incubadora (Scalp e Swing) aparecem no endpoint /api/waiting_tokens."""
+    db, settings = tmp_db_and_settings
+    orchestrator = VertexBotOrchestrator(settings)
+    await orchestrator.initialize()
+
+    # Registra 1 token aguardando slot
+    orchestrator.waiting_tokens["SlotWaitToken"] = {
+        "address": "SlotWaitToken",
+        "symbol": "SLOT1",
+        "name": "Slot Wait Token",
+        "chain": "solana",
+        "dex": "raydium",
+        "initial_liquidity_usd": 15000.0,
+        "waiting_reason": "AGUARDANDO_SLOT",
+        "enqueued_at": "2026-09-19T12:00:00Z",
+    }
+
+    # Simula scanner com tokens na incubadora
+    mock_scanner = AsyncMock()
+    mock_scanner.get_incubator_tokens = lambda: [
+        {
+            "address": "IncubatorScalpToken",
+            "token_address": "IncubatorScalpToken",
+            "symbol": "INCU1",
+            "name": "Incubator Scalp Token",
+            "chain": "solana",
+            "dex": "raydium",
+            "initial_liquidity_usd": 8000.0,
+            "liquidity_usd": 8000.0,
+            "waiting_reason": "EM_MATURACAO_SCALP",
+            "reason_pending": "Em Maturação Scalp (30m / 120m)",
+            "enqueued_at": "2026-09-19T14:00:00Z",
+            "age_hours": 0.5,
+            "eligible_strategy": "SCALP",
+        },
+        {
+            "address": "IncubatorSwingToken",
+            "token_address": "IncubatorSwingToken",
+            "symbol": "INCU2",
+            "name": "Incubator Swing Token",
+            "chain": "bsc",
+            "dex": "pancakeswap_v3",
+            "initial_liquidity_usd": 25000.0,
+            "liquidity_usd": 25000.0,
+            "waiting_reason": "EM_MATURACAO_SWING",
+            "reason_pending": "Em Maturação Swing (2.1h / 3.0h)",
+            "enqueued_at": "2026-09-19T13:00:00Z",
+            "age_hours": 2.1,
+            "eligible_strategy": "SWING",
+        },
+    ]
+    orchestrator.scanner = mock_scanner
+
+    app = create_dashboard_app(db=db, orchestrator=orchestrator)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        resp = await client.get("/api/waiting_tokens")
+        assert resp.status == 200
+        json_data = await resp.json()
+        assert json_data["status"] == "success"
+        tokens = json_data["data"]
+        assert len(tokens) == 3
+
+        reasons = [t["waiting_reason"] for t in tokens]
+        assert "AGUARDANDO_SLOT" in reasons
+        assert "EM_MATURACAO_SCALP" in reasons
+        assert "EM_MATURACAO_SWING" in reasons
+
+        symbols = [t["symbol"] for t in tokens]
+        assert "SLOT1" in symbols
+        assert "INCU1" in symbols
+        assert "INCU2" in symbols
+    finally:
+        await client.close()
+
 
