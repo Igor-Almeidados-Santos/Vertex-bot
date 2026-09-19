@@ -60,29 +60,35 @@ class DexScreenerPriceFeed:
 
     def get_metadata(self, address: str) -> tuple[str | None, str | None] | None:
         """Retorna tupla (symbol, name) do cache para o endereço informado se disponível."""
-        return self._metadata_cache.get(address)
+        return self._metadata_cache.get(address) or self._metadata_cache.get(address.lower())
 
     def get_pair_data(self, address: str) -> dict[str, Any] | None:
         """Retorna o dicionário completo do par mais recente em cache para o token."""
-        return self._pair_data_cache.get(address)
+        return self._pair_data_cache.get(address) or self._pair_data_cache.get(address.lower())
 
     def _parse_pair_item(self, pair: dict[str, Any], prices: dict[str, Decimal]) -> None:
         """Extrai cotação e metadados de um par retornado pela DexScreener."""
         base_token = pair.get("baseToken", {})
-        token_addr = str(base_token.get("address", ""))
+        raw_addr = str(base_token.get("address", "")).strip()
         raw_price = pair.get("priceUsd")
         sym = base_token.get("symbol")
         nm = base_token.get("name")
-        if token_addr:
-            self._pair_data_cache[token_addr] = pair
-        if token_addr and (sym or nm):
-            self._metadata_cache[token_addr] = (sym, nm)
+        if raw_addr:
+            self._pair_data_cache[raw_addr] = pair
+            self._pair_data_cache[raw_addr.lower()] = pair
+        if raw_addr and (sym or nm):
+            self._metadata_cache[raw_addr] = (sym, nm)
+            self._metadata_cache[raw_addr.lower()] = (sym, nm)
 
-        if token_addr and raw_price and token_addr not in prices:
+        if raw_addr and raw_price:
             try:
-                prices[token_addr] = Decimal(str(raw_price))
+                dec_price = Decimal(str(raw_price))
+                if raw_addr not in prices:
+                    prices[raw_addr] = dec_price
+                if raw_addr.lower() not in prices:
+                    prices[raw_addr.lower()] = dec_price
             except Exception as parse_err:
-                logger.debug("Preço inválido para %s: %s", token_addr, parse_err)
+                logger.debug("Preço inválido para %s: %s", raw_addr, parse_err)
 
     async def fetch_prices(self, addresses: list[str]) -> dict[str, Decimal]:
         """Obtém cotações em USD para uma lista de endereços de tokens e extrai metadados."""

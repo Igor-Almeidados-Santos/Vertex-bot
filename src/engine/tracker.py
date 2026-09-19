@@ -271,3 +271,98 @@ class PositionTracker:
 
         return True
 
+    async def check_positions_watchdog(
+        self,
+        get_fresh_pair_data: Callable[[str], dict[str, Any] | None] | None = None,
+    ) -> list[int]:
+        """
+        Watchdog autônomo e independente de novos ticks de cotação.
+        Encerra posições estagnadas que atingiram tempo máximo (1h Scalp, 24h Swing)
+        ou cuja liquidez na DEX foi drenada.
+        """
+        closed_ids: list[int] = []
+        for pos_id, pos in list(self.active_positions.items()):
+            if pos.status in (PositionStatus.CLOSED, PositionStatus.STOPPED):
+                continue
+
+            strat = getattr(pos, "strategy_type", "SCALP")
+            elapsed_sec = pos.elapsed_seconds()
+            tokens_to_sell = pos.remaining_token_amount
+            if tokens_to_sell <= Decimal("0.0"):
+                continue
+
+            current_price = (
+                pos.current_price
+                if pos.current_price is not None and pos.current_price > Decimal("0.0")
+                else (pos.highest_price_seen if pos.highest_price_seen > Decimal("0.0") else pos.entry_price)
+            )
+
+            # 1. Scalp Timeout (1 hora estrita)
+            if strat == "SCALP" and elapsed_sec >= self.risk_manager.scalp_max_hold_seconds:
+                elapsed_min = elapsed_sec / 60.0
+                logger.warning(
+                    "⏰ [WATCHDOG SCALP TIMEOUT (1h)] Posição #%d (%s) atingiu %.1f minutos aberta | Forçando encerramento imediato ($%.8f)!",
+                    pos_id,
+                    pos.token_address,
+                    elapsed_min,
+                    current_price,
+                )
+                await self.engine.execute_sell(pos, tokens_to_sell, reason="SCALP_TIMEOUT", execution_price=current_price)
+                pos.close_position(current_price, reason="SCALP_TIMEOUT")
+                await self.positions_repo.close_position(pos_id, pos.realized_pnl_usd, status=PositionStatus.CLOSED)
+                self.active_positions.pop(pos_id, None)
+                closed_ids.append(pos_id)
+                if self.on_position_closed:
+                    try:
+                        await self.on_position_closed(pos)
+                    except Exception as cb_err:
+                        logger.warning("Erro em callback on_position_closed: %s", cb_err)
+                continue
+
+            # 2. Swing Timeout (24h)
+            if strat == "SWING" and elapsed_sec >= self.risk_manager.swing_max_hold_seconds:
+                logger.warning(
+                    "⏰ [WATCHDOG SWING TIMEOUT (24h)] Posição #%d (%s) atingiu %.1f horas aberta | Forçando encerramento imediato ($%.8f)!",
+                    pos_id,
+                    pos.token_address,
+                    elapsed_sec / 3600.0,
+                    current_price,
+                )
+                await self.engine.execute_sell(pos, tokens_to_sell, reason="SWING_TIMEOUT", execution_price=current_price)
+                pos.close_position(current_price, reason="SWING_TIMEOUT")
+                await self.positions_repo.close_position(pos_id, pos.realized_pnl_usd, status=PositionStatus.CLOSED)
+                self.active_positions.pop(pos_id, None)
+                closed_ids.append(pos_id)
+                if self.on_position_closed:
+                    try:
+                        await self.on_position_closed(pos)
+                    except Exception as cb_err:
+                        logger.warning("Erro em callback on_position_closed: %s", cb_err)
+                continue
+
+            # 3. Liquidez Drenada / Token Abandonado
+            if get_fresh_pair_data is not None:
+                pair = get_fresh_pair_data(pos.token_address)
+                if pair:
+                    liq_usd = float(pair.get("liquidity", {}).get("usd") or 0.0)
+                    if 0.0 < liq_usd < 2500.0:
+                        logger.warning(
+                            "🚨 [WATCHDOG DRENAGEM DE LIQUIDEZ] Posição #%d (%s) | Liquidez da pool colapsou para $%.2f | Fechando posição de emergência!",
+                            pos_id,
+                            pos.token_address,
+                            liq_usd,
+                        )
+                        await self.engine.execute_sell(pos, tokens_to_sell, reason="EMERGENCY_STOP", execution_price=current_price)
+                        pos.close_position(current_price, reason="EMERGENCY_STOP")
+                        await self.positions_repo.close_position(pos_id, pos.realized_pnl_usd, status=PositionStatus.STOPPED)
+                        self.active_positions.pop(pos_id, None)
+                        closed_ids.append(pos_id)
+                        if self.on_position_closed:
+                            try:
+                                await self.on_position_closed(pos)
+                            except Exception as cb_err:
+                                logger.warning("Erro em callback on_position_closed: %s", cb_err)
+                        continue
+
+        return closed_ids
+

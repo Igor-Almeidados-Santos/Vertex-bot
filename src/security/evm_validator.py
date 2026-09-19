@@ -158,6 +158,60 @@ class EVMSecurityValidator:
             reason = "Contrato proxy atualizável com proprietário oculto (risco de alteração súbita de lógica)"
             return False, reason, data
 
+        # 6. HARD GATE: Emissão ilimitada de tokens (is_mintable)
+        is_mintable = str(data.get("is_mintable", "0")) == "1"
+        if is_mintable:
+            reason = "Emissão ilimitada habilitada (is_mintable=1): risco crítico de diluição/rug pull pelo criador"
+            logger.warning("🚨 [EVM MINTABLE] Token %s (%s): %s", token_address, chain, reason)
+            return False, reason, data
+
+        # 7. HARD GATE: Renúncia reversível (can_take_back_ownership)
+        can_reclaim = str(data.get("can_take_back_ownership", "0")) == "1"
+        if can_reclaim:
+            reason = "Propriedade reversível: criador pode reaver o controle total do contrato a qualquer momento"
+            logger.warning("🚨 [EVM OWNERSHIP RECLAIM] Token %s (%s): %s", token_address, chain, reason)
+            return False, reason, data
+
+        # 8. HARD GATE: Manipulação arbitrária de saldos (owner_change_balance)
+        owner_manipulate = str(data.get("owner_change_balance", "0")) == "1"
+        if owner_manipulate:
+            reason = "Manipulação de saldo: criador tem permissão para alterar saldos de carteiras de terceiros"
+            logger.warning("🚨 [EVM BALANCE MANIPULATION] Token %s (%s): %s", token_address, chain, reason)
+            return False, reason, data
+
+        # 9. HARD GATE: Token listado em DEX reconhecida
+        is_in_dex = str(data.get("is_in_dex", "1")) == "1"
+        if not is_in_dex:
+            reason = "Token não identificado em exchanges descentralizadas verificadas (is_in_dex=0)"
+            return False, reason, data
+
+        # 10. HARD GATE: Verificação de queima / bloqueio de liquidez (LP)
+        lp_holders = data.get("lp_holders")
+        if isinstance(lp_holders, list) and lp_holders:
+            burn_addrs = {
+                "0x0000000000000000000000000000000000000000",
+                "0x000000000000000000000000000000000000dead",
+                "0x0000000000000000000000000000000000000001",
+            }
+            locked_or_burned_pct = Decimal("0.0")
+            for h in lp_holders:
+                if isinstance(h, dict):
+                    h_addr = str(h.get("address", "")).lower().strip()
+                    h_pct = Decimal(str(h.get("percent") or 0.0)) * Decimal("100.0")
+                    is_locked = str(h.get("is_locked", "0")) == "1"
+                    if h_addr in burn_addrs or is_locked:
+                        locked_or_burned_pct += h_pct
+
+            data["lp_locked_or_burned_pct"] = float(locked_or_burned_pct)
+            min_lp_protect = Decimal("70.0")
+            if locked_or_burned_pct < min_lp_protect:
+                reason = (
+                    f"Liquidez (LP) desprotegida: apenas {locked_or_burned_pct:.1f}% bloqueada/queimada "
+                    f"(mínimo exigido: {min_lp_protect:.1f}%) - Risco de remoção de liquidez (LP pull)"
+                )
+                logger.warning("🚨 [EVM LP RISK] Token %s (%s): %s", token_address, chain, reason)
+                return False, reason, data
+
         logger.info(
             "✅ [EVM SECURITY APROVADO] Token %s (%s) aprovado nos Hard Gates EVM (Taxas: Compra %.1f%% / Venda %.1f%%).",
             token_address,

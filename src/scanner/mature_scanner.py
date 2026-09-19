@@ -451,7 +451,7 @@ class MatureTokenScanner:
                             and self._is_candidate_needed(token_addr)
                         ):
                             raw_dex = str(p.get("dexId", "")).lower()
-                            if raw_dex in ("pumpfun", "pump"):
+                            if raw_dex in ("pumpfun", "pump", "pumpswap") or "pumpswap" in raw_dex:
                                 continue
                             raw_liq = p.get("liquidity")
                             liq_dict = raw_liq if isinstance(raw_liq, dict) else {}
@@ -771,9 +771,9 @@ class MatureTokenScanner:
         dex, pool_address, liquidity_usd, symbol, name, price_usd = self._extract_pool_data(pair_data, hint)
 
         # Descarta bonding curves do Pump.fun que nunca graduaram para pool AMM
-        if dex in ("pumpfun", "pump"):
+        if dex in ("pumpfun", "pump", "pumpswap") or "pumpswap" in dex:
             logger.debug(
-                "Token %s descartado: bonding curve Pump.fun sem graduação para DEX AMM.",
+                "Token %s descartado: bonding curve Pump.fun/PumpSwap sem graduação para DEX AMM.",
                 token_address,
             )
             return None, True

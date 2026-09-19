@@ -25,6 +25,7 @@ from src.engine.risk import RiskManager
 from src.engine.tracker import PositionTracker
 from src.scanner.client import ResilientRPCClient
 from src.scanner.listener import create_scanner
+from src.security.chart_auditor import ChartHealthAuditor
 from src.security.market_dynamics import MarketDynamicsValidator
 from src.security.validator import SecurityValidator
 from src.utils.logger import setup_logger
@@ -80,6 +81,15 @@ class VertexBotOrchestrator:
             max_tax_pct=float(settings.MAX_BUY_TAX_PCT),
             market_validator=self.market_validator,
             strategy_mode=settings.TRADING_STRATEGY_MODE,
+        )
+
+        # Auditor de Saúde Gráfica e Estrutura de Velas (Anti-Dump / 3 Velas Mínimas)
+        self.chart_auditor: ChartHealthAuditor = ChartHealthAuditor(
+            geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
+            dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
+            min_candles_required=int(getattr(settings, "MIN_CANDLES_REQUIRED", 3)),
+            min_volume_1h_usd=Decimal(str(getattr(settings, "MIN_VOLUME_1H_USD", "3000.0"))),
+            min_liquidity_usd=settings.MIN_LIQUIDITY_USD,
         )
 
         # Camada de Execução (Paper Trading por padrão)
@@ -1189,13 +1199,26 @@ class VertexBotOrchestrator:
                     self._save_waiting_tokens()
                     continue
 
-                price = live_prices.get(addr)
+                price = live_prices.get(addr) or live_prices.get(addr.lower())
                 if self._is_waiting_token_dumped(item, price):
                     self.waiting_tokens.pop(addr, None)
                     self._save_waiting_tokens()
                     continue
 
                 token_meta = self._build_waiting_token_meta(item, price)
+                if hasattr(self, "chart_auditor") and self.chart_auditor is not None:
+                    is_chart_safe, chart_reason, _ = await self.chart_auditor.audit_token_pre_entry(token_meta)
+                    if not is_chart_safe:
+                        logger.warning(
+                            "🧹 [FILA DE ESPERA PURGADA] Token %s (%s) desqualificado e purgado: %s",
+                            token_meta.symbol or addr[:8],
+                            addr,
+                            chart_reason,
+                        )
+                        self.waiting_tokens.pop(addr, None)
+                        self._save_waiting_tokens()
+                        continue
+
                 await self._evaluate_and_execute_entry(token_meta)
 
     async def _evaluate_and_execute_entry(self, token: TokenMetadata) -> None:
@@ -1251,6 +1274,21 @@ class VertexBotOrchestrator:
                     "⚠️ [MERCADO DESFAVORÁVEL] Token %s reprovado na validação de mercado: %s. Descartando entrada.",
                     token.symbol or token.address[:8],
                     market_reason,
+                )
+                if token.address in self.waiting_tokens:
+                    self.waiting_tokens.pop(token.address, None)
+                    self._save_waiting_tokens()
+                return
+
+        # Auditoria estrutural de velas e integridade gráfica pré-entrada (Last-Second Gate)
+        if hasattr(self, "chart_auditor") and self.chart_auditor is not None:
+            is_chart_safe, chart_reason, _ = await self.chart_auditor.audit_token_pre_entry(token)
+            if not is_chart_safe:
+                logger.warning(
+                    "🚫 [AUDITORIA GRÁFICA / PRÉ-ENTRADA REPROVADA] Token %s (%s): %s. Entrada cancelada.",
+                    token.symbol or token.address[:8],
+                    token.address,
+                    chart_reason,
                 )
                 if token.address in self.waiting_tokens:
                     self.waiting_tokens.pop(token.address, None)
@@ -1752,7 +1790,7 @@ class VertexBotOrchestrator:
         self, pos_id: int, pos: PositionState, prices: dict[str, Decimal]
     ) -> None:
         """Processa tick de preço e enriquecimento de metadados para uma posição ativa."""
-        current_price = prices.get(pos.token_address)
+        current_price = prices.get(pos.token_address) or prices.get(pos.token_address.lower())
         if current_price is not None and current_price > Decimal("0"):
             self.reentry_manager.update_post_exit_price(pos.token_address, current_price)
             await self.position_tracker.process_price_tick(pos_id, current_price)
@@ -1916,6 +1954,15 @@ class VertexBotOrchestrator:
                         if not self.is_running:
                             break
                         await self._process_active_position_tick(pos_id, pos, prices)
+
+                # Watchdog autônomo de posições: Encerra timeouts (1h Scalp, 24h Swing) e liquidez drenada
+                if self.position_tracker.active_positions:
+                    try:
+                        await self.position_tracker.check_positions_watchdog(
+                            get_fresh_pair_data=getattr(self.price_feed, "get_pair_data", None)
+                        )
+                    except Exception as wd_err:
+                        logger.debug("Erro no Watchdog de posições: %s", wd_err)
 
             except asyncio.CancelledError:
                 break
