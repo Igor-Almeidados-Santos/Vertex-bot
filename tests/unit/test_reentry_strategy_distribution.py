@@ -102,8 +102,10 @@ async def test_reentry_swing_promotion_after_scalp_closed() -> None:
     settings.MIN_TOKEN_AGE_HOURS_SWING = 3.0
     settings.MAX_TOKEN_AGE_HOURS_SWING = 6.0
     settings.MIN_LIQUIDITY_SWING_USD = Decimal("20000.0")
+    settings.PAPER_INITIAL_WALLET_USD = Decimal("10.0")
 
     orchestrator = VertexBotOrchestrator(settings)
+    orchestrator.execution_engine.balance_usd = Decimal("10.0")
     orchestrator.is_running = True
 
     # Token que encerrou Scalp há 10 minutos (cool-off cumprido)

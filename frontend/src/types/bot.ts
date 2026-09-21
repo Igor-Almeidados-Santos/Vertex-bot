@@ -10,6 +10,10 @@ export interface BotSettings {
   max_slippage_pct: number;
   max_top10_holders_pct: number;
   min_liquidity_usd: number;
+  live_buy_amount_usd?: number;
+  live_max_concurrent_positions?: number;
+  live_max_slippage_pct?: number;
+  live_jito_tip_lamports?: number;
 
   // Scalp
   scalp_max_hold_minutes: number;
@@ -45,6 +49,16 @@ export interface BotSettings {
   max_token_age_swing_hours?: number;
 }
 
+export interface WalletInfo {
+  chain: string;
+  name?: string;
+  address: string;
+  is_connected: boolean;
+  balance_native?: number;
+  native_symbol?: string;
+  balance_usd?: number;
+}
+
 export interface BotStatusData {
   is_running: boolean;
   is_paused: boolean;
@@ -53,6 +67,14 @@ export interface BotStatusData {
   active_positions_count: number;
   waiting_tokens_count: number;
   settings: BotSettings;
+  mode?: string;
+  modes?: {
+    paper?: { running: boolean; paused: boolean };
+    live?: { running: boolean; paused: boolean };
+  };
+  has_wallet?: boolean;
+  has_connected_wallet?: boolean;
+  wallets?: WalletInfo[];
 }
 
 export interface PnLSummary {
@@ -160,6 +182,8 @@ export interface OrderItem {
   total_usd?: number;
   tokens_amount?: number;
   amount?: number;
+  tx_hash?: string;
+  mode?: string;
   timestamp?: string;
   executed_at?: string;
   reason?: string;
@@ -191,4 +215,28 @@ export interface SystemLogItem {
   module: string;
   message: string;
 }
+
+export interface PriorityToken {
+  address: string;
+  symbol: string;
+  name: string;
+  chain: string;
+  dex: string;
+  tier: "CONSOLIDATED" | "EMERGING" | string;
+  initial_liquidity_usd: number;
+  current_liquidity_usd: number;
+  last_price: number;
+  highest_price_seen: number;
+  total_trades_count: number;
+  successful_trades_count: number;
+  total_realized_pnl_usd: number;
+  is_active_priority: boolean;
+  is_alive: boolean;
+  origin_mode?: "LIVE" | "PAPER" | "BOTH" | string;
+  added_at: string;
+  last_traded_at: string;
+  last_evaluated_at: string;
+  raw_event?: Record<string, unknown>;
+}
+
 

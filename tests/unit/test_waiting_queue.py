@@ -139,28 +139,31 @@ async def test_waiting_queue_drained_when_slot_freed(
 
     prices = {token1.address: Decimal("1.0"), token2.address: Decimal("1.5")}
 
-    with patch.object(orchestrator.price_feed, "fetch_prices", new=AsyncMock(return_value=prices)):
-        await orchestrator._evaluate_and_execute_entry(token1)
-        await orchestrator._evaluate_and_execute_entry(token2)
-        assert len(orchestrator.waiting_tokens) == 1
+    try:
+        with patch.object(orchestrator.price_feed, "fetch_prices", new=AsyncMock(return_value=prices)):
+            await orchestrator._evaluate_and_execute_entry(token1)
+            await orchestrator._evaluate_and_execute_entry(token2)
+            assert len(orchestrator.waiting_tokens) == 1
 
-        # Fecha a posição do token 1 simulando Trailing Stop
-        pos1 = next(p for p in orchestrator.position_tracker.active_positions.values() if p.token_address == token1.address)
-        pos1.status = PositionStatus.CLOSED
-        if pos1.id is not None:
-            orchestrator.position_tracker.active_positions.pop(pos1.id, None)
+            # Fecha a posição do token 1 simulando Trailing Stop
+            pos1 = next(p for p in orchestrator.position_tracker.active_positions.values() if p.token_address == token1.address)
+            pos1.status = PositionStatus.CLOSED
+            if pos1.id is not None:
+                orchestrator.position_tracker.active_positions.pop(pos1.id, None)
 
-        # Notifica encerramento da posição (deve disparar preenchimento da vaga)
-        await orchestrator._handle_position_closed(pos1)
-        for _ in range(20):
-            if len(orchestrator.position_tracker.active_positions) == 1:
-                break
-            await asyncio.sleep(0.05)
+            # Notifica encerramento da posição (deve disparar preenchimento da vaga)
+            await orchestrator._handle_position_closed(pos1)
+            for _ in range(20):
+                if len(orchestrator.position_tracker.active_positions) == 1:
+                    break
+                await asyncio.sleep(0.05)
 
-        # Token 2 deve ter saído da fila e aberto posição
-        assert len(orchestrator.waiting_tokens) == 0
-        assert len(orchestrator.position_tracker.active_positions) == 1
-        assert any(p.token_address == token2.address for p in orchestrator.position_tracker.active_positions.values())
+            # Token 2 deve ter saído da fila e aberto posição
+            assert len(orchestrator.waiting_tokens) == 0
+            assert len(orchestrator.position_tracker.active_positions) == 1
+            assert any(p.token_address == token2.address for p in orchestrator.position_tracker.active_positions.values())
+    finally:
+        await orchestrator.stop()
 
 
 @pytest.mark.asyncio
@@ -183,7 +186,8 @@ async def test_waiting_tokens_api_endpoint(tmp_db_and_settings: tuple[DatabaseMa
     }
 
     app = create_dashboard_app(db=db, orchestrator=orchestrator)
-    client = TestClient(TestServer(app))
+    server = TestServer(app)
+    client = TestClient(server)
     await client.start_server()
 
     try:
@@ -195,6 +199,8 @@ async def test_waiting_tokens_api_endpoint(tmp_db_and_settings: tuple[DatabaseMa
         assert json_data["data"][0]["symbol"] == "WAIT1"
     finally:
         await client.close()
+        await server.close()
+        await orchestrator.stop()
 
 
 @pytest.mark.asyncio
@@ -255,7 +261,8 @@ async def test_incubator_tokens_included_in_waiting_tokens_endpoint(
     orchestrator.scanner = mock_scanner
 
     app = create_dashboard_app(db=db, orchestrator=orchestrator)
-    client = TestClient(TestServer(app))
+    server = TestServer(app)
+    client = TestClient(server)
     await client.start_server()
 
     try:
@@ -277,5 +284,7 @@ async def test_incubator_tokens_included_in_waiting_tokens_endpoint(
         assert "INCU2" in symbols
     finally:
         await client.close()
+        await server.close()
+        await orchestrator.stop()
 
 

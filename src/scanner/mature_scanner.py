@@ -73,6 +73,8 @@ class MatureTokenScanner:
         geckoterminal_base_url: str = "https://api.geckoterminal.com",
         max_seen_cache: int = 10000,
         enable_established_pools: bool = False,
+        min_age_hours_consolidated: float = 720.0,
+        max_age_hours_consolidated: float = 87600.0,
         target_chains: tuple[str, ...] | list[str] = (
             "solana",
             "base",
@@ -99,6 +101,8 @@ class MatureTokenScanner:
         self.geckoterminal_base_url: str = geckoterminal_base_url.rstrip("/")
         self.max_seen_cache: int = max_seen_cache
         self.enable_established_pools: bool = enable_established_pools
+        self.min_age_hours_consolidated: float = min_age_hours_consolidated
+        self.max_age_hours_consolidated: float = max_age_hours_consolidated
         self.target_chains: tuple[str, ...] = tuple(c.lower().strip() for c in target_chains)
 
         self._seen_addresses: set[str] = set()
@@ -570,7 +574,46 @@ class MatureTokenScanner:
             established_pools = await self._fetch_geckoterminal_established_pools()
             results.extend(established_pools)
 
+        # 5. Ordena todos os candidatos dos mais antigos para os mais novos (Oldest to Newest)
+        # Garante que tokens históricos consolidados (ex: Raydium de 3+ anos) sejam avaliados primeiro
+        now_utc = datetime.now(UTC)
+        results.sort(
+            key=lambda item: self._extract_approx_candidate_age_hours(item[1], now_utc),
+            reverse=True,
+        )
+
         return results
+
+    def _extract_approx_candidate_age_hours(self, hint: dict[str, Any], now_utc: datetime) -> float:
+        """Calcula a idade aproximada em horas para ordenação de candidatos (mais antigos primeiro)."""
+        # 1. Timestamp explícito de pairCreatedAt (ms)
+        pair_data = hint.get("pair_data")
+        if isinstance(pair_data, dict):
+            created_ms = pair_data.get("pairCreatedAt")
+            if created_ms is not None:
+                try:
+                    c_ms = float(created_ms)
+                    if c_ms > 0:
+                        now_ms = now_utc.timestamp() * 1000.0
+                        return max(0.0, (now_ms - c_ms) / (1000.0 * 3600.0))
+                except (ValueError, TypeError):
+                    pass
+
+        # 2. ISO string de pool_created_at
+        pool_created = hint.get("pool_created_at")
+        if pool_created and isinstance(pool_created, str):
+            try:
+                clean_iso = pool_created.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(clean_iso)
+                return max(0.0, (now_utc - dt).total_seconds() / 3600.0)
+            except Exception:
+                pass
+
+        # 3. Fallback de prioridade se for pool consolidada/estabelecida
+        if hint.get("is_established"):
+            return 8760.0  # Atribui prioridade equivalente a 1 ano
+
+        return 0.0
 
     async def _fetch_dexscreener_search_candidates(
         self,
@@ -922,13 +965,24 @@ class MatureTokenScanner:
             self._register_maturing_candidate(token_address, age_hours, pair_data, hint)
             return None, False
 
-        # Token muito antigo: ultrapassou o teto da janela, descartar permanentemente
-        if age_hours > self.max_age_hours:
+        # Validação do teto de idade:
+        # Se for de pool consolidada ou possuir idade >= min_age_hours_consolidated (30 dias),
+        # estende o limite para max_age_hours_consolidated (10 anos = 87600h),
+        # assegurando que tokens históricos como Raydium (3+ anos) sejam aprovados e negociados.
+        effective_max_age = (
+            self.max_age_hours_consolidated
+            if (self.enable_established_pools or age_hours >= self.min_age_hours_consolidated or hint.get("is_established"))
+            else self.max_age_hours
+        )
+
+        # Token muito antigo: ultrapassou até o teto estendido consolidado, descartar
+        if age_hours > effective_max_age:
             logger.debug(
                 "Token %s expirado: %.2fh > %.1fh. Descartado permanentemente.",
                 token_address,
                 age_hours,
                 self.max_age_hours,
+                effective_max_age,
             )
             return None, True
 
@@ -1081,6 +1135,8 @@ class MatureTokenScanner:
             },
         )
 
+        tier = "CONSOLIDATED" if age_hours >= self.min_age_hours_consolidated else "EMERGING"
+
         token = TokenMetadata(
             address=token_address,
             chain=detected_chain,
@@ -1093,6 +1149,7 @@ class MatureTokenScanner:
             raw_event={
                 "priceUsd": price_usd,
                 "age_hours": age_hours,
+                "token_tier": tier,
                 "pair_data": pair_data,
                 "hint": hint,
             },

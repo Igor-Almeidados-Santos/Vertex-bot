@@ -410,22 +410,33 @@ class PositionsRepository:
         await self.db.execute(query, params)
 
     async def clear_paper_trading_data(self) -> None:
-        """Limpa posições e ordens do modo de simulação (PAPER) e reseta os contadores de ID."""
+        """Limpa posições e ordens do modo de simulação (PAPER) e reseta contadores se não houver dados em LIVE."""
         query_orders = "DELETE FROM ordens_executadas WHERE mode = 'PAPER'"
         query_positions = "DELETE FROM posicoes WHERE mode = 'PAPER'"
-        query_seq = "DELETE FROM sqlite_sequence WHERE name IN ('posicoes', 'ordens_executadas')"
         await self.db.execute(query_orders)
         await self.db.execute(query_positions)
-        try:
-            await self.db.execute(query_seq)
-        except Exception:
-            pass
-        logger.info("Dados de simulação (PAPER) limpos com sucesso e IDs resetados para 1. Tokens catalogados preservados.")
 
-    async def get_open_positions(self) -> list[PositionState]:
-        """Carrega todas as posições em aberto ou parcialmente fechadas com tokens remanescentes."""
-        query = "SELECT * FROM posicoes WHERE status IN ('OPEN', 'PARTIALLY_CLOSED') AND remaining_token_amount > 0"
-        rows = await self.db.fetchall(query)
+        # Blindagem: Só reseta sequência de autoincrement se não houver posições em LIVE para evitar colisões
+        check_live = "SELECT COUNT(*) FROM posicoes WHERE mode = 'LIVE'"
+        row = await self.db.fetchone(check_live)
+        live_count = int(row[0] or 0) if row else 0
+        if live_count == 0:
+            query_seq = "DELETE FROM sqlite_sequence WHERE name IN ('posicoes', 'ordens_executadas')"
+            try:
+                await self.db.execute(query_seq)
+            except Exception:
+                pass
+        logger.info("Dados de simulação (PAPER) limpos com sucesso. Tokens catalogados e dados LIVE 100% preservados.")
+
+    async def get_open_positions(self, mode: ExecutionMode | str | None = None) -> list[PositionState]:
+        """Carrega posições em aberto com filtro opcional de modo (PAPER ou LIVE)."""
+        if mode is not None:
+            mode_str = mode.value if isinstance(mode, ExecutionMode) else str(mode).upper()
+            query = "SELECT * FROM posicoes WHERE status IN ('OPEN', 'PARTIALLY_CLOSED') AND remaining_token_amount > 0 AND mode = ?"
+            rows = await self.db.fetchall(query, (mode_str,))
+        else:
+            query = "SELECT * FROM posicoes WHERE status IN ('OPEN', 'PARTIALLY_CLOSED') AND remaining_token_amount > 0"
+            rows = await self.db.fetchall(query)
         positions: list[PositionState] = []
         for r in rows:
             pos_dict = dict(r)
@@ -490,20 +501,28 @@ class PositionsRepository:
         self,
         limit: int = 100,
         status_filter: str | None = None,
+        mode: ExecutionMode | str | None = None,
     ) -> list[dict[str, Any]]:
-        """Retorna todas as posições registradas com metadados do token (symbol e name), com filtro opcional de status."""
-        where_clause = ""
+        """Retorna todas as posições registradas com metadados do token (symbol e name), com filtro opcional de status e modo."""
+        conditions: list[str] = []
         params: list[Any] = []
+
+        if mode is not None:
+            mode_str = mode.value if isinstance(mode, ExecutionMode) else str(mode).upper()
+            conditions.append("p.mode = ?")
+            params.append(mode_str)
 
         if status_filter:
             norm = status_filter.lower()
             if norm == "open":
-                where_clause = "WHERE p.status IN ('OPEN', 'PARTIALLY_CLOSED') AND p.remaining_token_amount > 0"
+                conditions.append("p.status IN ('OPEN', 'PARTIALLY_CLOSED') AND p.remaining_token_amount > 0")
             elif norm == "closed":
-                where_clause = "WHERE (p.status IN ('CLOSED', 'STOPPED') OR p.remaining_token_amount <= 0)"
+                conditions.append("(p.status IN ('CLOSED', 'STOPPED') OR p.remaining_token_amount <= 0)")
             else:
-                where_clause = "WHERE p.status = ?"
+                conditions.append("p.status = ?")
                 params.append(status_filter.upper())
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         query = f"""
         SELECT p.id, p.token_address, p.status, p.mode, p.strategy_type, p.entry_price, p.initial_token_amount,
@@ -533,11 +552,19 @@ class PositionsRepository:
 
     async def get_pnl_summary(
         self,
+        mode: ExecutionMode | str | None = "PAPER",
         initial_wallet_usd: float = 5.0,
         current_cash_usd: float | None = None,
     ) -> dict[str, Any]:
-        """Calcula métricas financeiras agregadas de PnL e taxa de acerto."""
-        query = """
+        """Calcula métricas financeiras agregadas de PnL e taxa de acerto por modo (PAPER ou LIVE)."""
+        where_clause = ""
+        params: list[Any] = []
+        if mode is not None:
+            mode_str = mode.value if isinstance(mode, ExecutionMode) else str(mode).upper()
+            where_clause = "WHERE mode = ?"
+            params.append(mode_str)
+
+        query = f"""
         SELECT
             COUNT(*) as total_positions,
             SUM(CASE WHEN status IN ('OPEN', 'PARTIALLY_CLOSED') THEN 1 ELSE 0 END) as active_positions,
@@ -548,8 +575,9 @@ class PositionsRepository:
             SUM(allocated_capital_usd) as total_allocated_usd,
             SUM(CASE WHEN status IN ('OPEN', 'PARTIALLY_CLOSED') THEN allocated_capital_usd ELSE 0 END) as active_capital_usd
         FROM posicoes
+        {where_clause}
         """
-        row = await self.db.fetchone(query)
+        row = await self.db.fetchone(query, tuple(params) if params else ())
         if not row:
             cash = current_cash_usd if current_cash_usd is not None else initial_wallet_usd
             return {
@@ -634,19 +662,32 @@ class OrdersRepository:
         except Exception as exc:
             raise DatabaseError(f"Erro ao registrar ordem para posição {order.position_id}: {exc}") from exc
 
-    async def get_recent_orders(self, limit: int = 200) -> list[dict[str, Any]]:
-        """Retorna histórico cronológico de execuções de ordens."""
-        query = """
+    async def get_recent_orders(
+        self,
+        limit: int = 200,
+        mode: ExecutionMode | str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retorna histórico cronológico de execuções de ordens com filtro opcional de modo."""
+        where_clause = ""
+        params: list[Any] = []
+        if mode is not None:
+            mode_str = mode.value if isinstance(mode, ExecutionMode) else str(mode).upper()
+            where_clause = "WHERE o.mode = ?"
+            params.append(mode_str)
+
+        query = f"""
         SELECT o.id, o.position_id, o.order_type, o.mode, o.price, o.amount, o.total_usd,
                o.tx_hash, o.fee_cost_usd, o.slippage_realized, o.notes, o.executed_at,
                p.token_address, t.symbol, t.name, t.chain
         FROM ordens_executadas o
         LEFT JOIN posicoes p ON o.position_id = p.id
         LEFT JOIN tokens_catalogados t ON p.token_address = t.address
+        {where_clause}
         ORDER BY o.id DESC
         LIMIT ?
         """
-        rows = await self.db.fetchall(query, (limit,))
+        params.append(limit)
+        rows = await self.db.fetchall(query, tuple(params))
         orders: list[dict[str, Any]] = []
         for r in rows:
             d = dict(r)

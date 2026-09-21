@@ -95,6 +95,14 @@ class PerformanceScalingManager:
                 self.stoploss_cooloff_sec,
             )
 
+    def authorize_immediate_reanalysis(self, token_address: str) -> None:
+        """Libera o token para reanálise e reentrada imediata sem restrições de cool-off temporal."""
+        record = self._exit_records.get(token_address)
+        if record is not None:
+            record.is_winner = True
+            record.exit_reason = "REANALYSIS_AUTHORIZED"
+            logger.info("🔓 [REANÁLISE IMEDIATA] Token %s liberado para reavaliação instantânea sem cool-off.", token_address)
+
     def update_post_exit_price(self, token_address: str, current_price: Decimal) -> None:
         """Atualiza a mínima histórica observada após o encerramento da posição."""
         record = self._exit_records.get(token_address)

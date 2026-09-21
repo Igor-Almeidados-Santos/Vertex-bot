@@ -4,9 +4,9 @@ Configurações Globais do Vertex-bot com suporte a Pydantic v2 e fallback nativ
 
 import os
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     # === PROVEDOR DE INGESTÃO (SCANNER) ===
     SCANNER_PROVIDER: Literal["MATURE_POOLS", "INDEXED", "RAW_RPC", "PUMPPORTAL", "HYBRID", "GRADUATIONS"] = "HYBRID"
     MIN_TOKEN_AGE_HOURS: float = 3.0   # Mínimo 3 horas (permite consolidação e formação de 3 velas de 1h)
-    MAX_TOKEN_AGE_HOURS: float = 720.0 # Até 720 horas (1 mês) para Scalp consolidado
+    MAX_TOKEN_AGE_HOURS: float = 87600.0 # Até 87.600 horas (10 anos) para permitir tokens consolidados (Raydium, Orca, etc.)
+    MIN_TOKEN_AGE_HOURS_CONSOLIDATED: float = 720.0 # A partir de 720 horas (30 dias) são classificados como Consolidados
+    MAX_TOKEN_AGE_HOURS_CONSOLIDATED: float = 87600.0 # Teto estendido para tokens consolidados históricos
     ENABLE_ESTABLISHED_POOLS: bool = True  # Ativa busca de pools consolidadas e trending
     MATURE_POOLS_POLL_INTERVAL_SEC: float = 5.0
     WATCHLIST_POLL_INTERVAL_SEC: float = 25.0  # Intervalo de verificação de reentrada na watchlist
@@ -51,7 +53,7 @@ class Settings(BaseSettings):
     SQLITE_DB_PATH: str = "data/vertex_bot.db"
 
     # === PAPER TRADING DEFAULTS ===
-    PAPER_INITIAL_WALLET_USD: Decimal = Decimal("5.0")
+    PAPER_INITIAL_WALLET_USD: Decimal = Decimal("0.0")
     MAX_CONCURRENT_POSITIONS: int = 50
     MIN_TRADE_AMOUNT_USD: Decimal = Decimal("1.0")
     PAPER_INITIAL_BALANCE_SOL: Decimal = Decimal("10.0")
@@ -158,9 +160,38 @@ class Settings(BaseSettings):
     BLAST_RPC_URL: str = "https://rpc.blast.io"
     GOPLUS_API_BASE_URL: str = "https://api.gopluslabs.io/api/v1"
 
-    # === LIVE TRADING ===
+    # === LIVE TRADING CONFIGURATION ===
     WALLET_PRIVATE_KEY_BASE58: str | None = None
+    SOLANA_PRIVATE_KEY_BASE58: str | None = None
     EVM_WALLET_PRIVATE_KEY: str | None = None
+    EVM_PRIVATE_KEY: str | None = None
+    LIVE_BUY_AMOUNT_USD: Decimal = Decimal("5.0")
+    LIVE_MAX_CONCURRENT_POSITIONS: int = 3
+    LIVE_MAX_SLIPPAGE_PCT: Decimal = Decimal("1.5")
+    LIVE_JITO_TIP_LAMPORTS: int = 50000
+
+    @staticmethod
+    def get_dir(mode: str) -> Path:
+        """Retorna o diretório isolado por modo (data/paper ou data/live)."""
+        m = mode.strip().lower()
+        d = Path(f"data/{m}")
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @classmethod
+    def get_config_path(cls, mode: str = "paper") -> Path:
+        """Caminho do arquivo de configuração persistida do modo."""
+        return cls.get_dir(mode) / "bot_config.json"
+
+    @classmethod
+    def get_control_path(cls, mode: str = "paper") -> Path:
+        """Caminho do arquivo de controle IPC do modo."""
+        return cls.get_dir(mode) / "bot_control.json"
+
+    @classmethod
+    def get_status_path(cls, mode: str = "paper") -> Path:
+        """Caminho do arquivo de status de telemetria do modo."""
+        return cls.get_dir(mode) / "bot_status.json"
 
 
 def load_env_file(filepath: str = ".env") -> dict[str, str]:
@@ -237,5 +268,16 @@ def get_settings(env_path: str = ".env") -> Settings:
     elif settings.PRIMARY_RPC_HTTP_URL == "https://api.mainnet-beta.solana.com":
         # Se não há chave privada e a URL caiu no nó padrão que bloqueia cloud/VPS, desvia para nó público mais estável
         settings.PRIMARY_RPC_HTTP_URL = "https://solana-rpc.publicnode.com"
+
+    # Sincroniza aliases de chaves privadas para compatibilidade
+    if settings.SOLANA_PRIVATE_KEY_BASE58 and not settings.WALLET_PRIVATE_KEY_BASE58:
+        settings.WALLET_PRIVATE_KEY_BASE58 = settings.SOLANA_PRIVATE_KEY_BASE58
+    elif settings.WALLET_PRIVATE_KEY_BASE58 and not settings.SOLANA_PRIVATE_KEY_BASE58:
+        settings.SOLANA_PRIVATE_KEY_BASE58 = settings.WALLET_PRIVATE_KEY_BASE58
+
+    if settings.EVM_PRIVATE_KEY and not settings.EVM_WALLET_PRIVATE_KEY:
+        settings.EVM_WALLET_PRIVATE_KEY = settings.EVM_PRIVATE_KEY
+    elif settings.EVM_WALLET_PRIVATE_KEY and not settings.EVM_PRIVATE_KEY:
+        settings.EVM_PRIVATE_KEY = settings.EVM_WALLET_PRIVATE_KEY
 
     return settings

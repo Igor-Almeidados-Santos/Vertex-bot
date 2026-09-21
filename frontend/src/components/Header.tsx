@@ -26,6 +26,7 @@ interface HeaderProps {
   onRefresh: () => void;
 }
 
+
 export function Header({
   status,
   summary,
@@ -167,6 +168,7 @@ export function Header({
           </div>
 
           {/* Botões de Ação */}
+          {/* Botões de Ação Globais */}
           <div className="flex items-center gap-1.5 border-l border-border pl-2">
             {/* Pause / Resume */}
             <button

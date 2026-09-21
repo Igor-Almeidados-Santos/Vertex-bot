@@ -98,21 +98,27 @@ export function Sidebar({
               Trading & Execução
             </div>
             <div className="space-y-1">
-              {/* 1. Dashboard (Real) */}
+              {/* 1. Operações Reais (Live) */}
               <button
                 onClick={() => handleNavClick("DASHBOARD_REAL")}
                 className={`w-full px-3 py-2.5 rounded-xl text-left flex items-center justify-between transition-all group ${
                   currentSection === "DASHBOARD_REAL"
-                    ? "bg-brand-500/15 text-brand-300 border border-brand-500/40"
-                    : "text-gray-400 hover:text-gray-200 hover:bg-surface-card"
+                    ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20 font-semibold"
+                    : "text-gray-300 hover:text-white hover:bg-surface-card"
                 }`}
               >
                 <div className="flex items-center gap-2.5">
-                  <LayoutDashboard className="w-4 h-4 text-gray-400 group-hover:text-brand-400 transition-colors" />
-                  <span>Dashboard (Real)</span>
+                  <LayoutDashboard className="w-4 h-4" />
+                  <span>Operações Reais (LIVE)</span>
                 </div>
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface-card border border-border text-gray-400 font-mono">
-                  Em breve
+                <span
+                  className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-bold ${
+                    currentSection === "DASHBOARD_REAL"
+                      ? "bg-white/20 text-white"
+                      : "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                  }`}
+                >
+                  LIVE
                 </span>
               </button>
 
@@ -127,8 +133,9 @@ export function Sidebar({
               >
                 <div className="flex items-center gap-2.5">
                   <FlaskConical className="w-4 h-4" />
-                  <span>Simulação</span>
+                  <span>Simulação (PAPER)</span>
                 </div>
+
                 <div className="flex items-center gap-1.5">
                   {openPositionsCount > 0 && (
                     <span

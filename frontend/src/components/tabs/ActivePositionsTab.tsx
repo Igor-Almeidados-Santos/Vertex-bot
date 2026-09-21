@@ -126,37 +126,6 @@ export function ActivePositionsTab({ positions, onRefresh }: ActivePositionsTabP
             </button>
           </div>
 
-          <div className="flex items-center gap-1 bg-surface-card p-1 rounded-xl border border-border">
-            <button
-              onClick={() => setFilterChain("ALL")}
-              className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
-                filterChain === "ALL"
-                  ? "bg-gray-700 text-white shadow-sm"
-                  : "text-gray-400 hover:text-white"
-              }`}
-            >
-              Multi-Chain
-            </button>
-            <button
-              onClick={() => setFilterChain("solana")}
-              className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
-                filterChain === "solana"
-                  ? "bg-purple-600 text-white shadow-sm font-semibold"
-                  : "text-gray-400 hover:text-white"
-              }`}
-            >
-              Solana
-            </button>
-            <button
-              onClick={() => setFilterChain("base")}
-              className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
-                filterChain === "base"
-                  ? "bg-blue-600 text-white shadow-sm font-semibold"
-                  : "text-gray-400 hover:text-white"
-              }`}
-            >
-              Base
-            </button>
           {/* Filtro por Rede */}
           <div className="flex items-center gap-1 bg-surface-card p-1 rounded-xl border border-border overflow-x-auto max-w-full">
             {[

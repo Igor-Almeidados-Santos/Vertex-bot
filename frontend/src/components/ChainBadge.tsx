@@ -98,13 +98,10 @@ export function ChainBadge({ chain, className = "" }: ChainBadgeProps) {
   }
   return (
     <span
-      className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-purple-500/15 text-purple-400 border border-purple-500/30 ${className}`}
-      title="Rede Solana (SVM)"
       className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-slate-500/15 text-slate-400 border border-slate-500/30 ${className}`}
-      title={`Rede ${chain}`}
+      title={`Rede ${chain || "N/A"}`}
     >
-      Solana
-      {chain}
+      {chain || "N/A"}
     </span>
   );
 }

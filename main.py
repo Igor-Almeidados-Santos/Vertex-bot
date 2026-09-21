@@ -12,15 +12,18 @@ import signal
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal
 from typing import Any, Literal, cast
 
 from src.config.settings import Settings, get_settings
 from src.database.connection import DatabaseManager
 from src.database.models import PositionState, TokenMetadata
 from src.database.repository import OrdersRepository, PositionsRepository, TokensRepository
+from src.engine.interface import IExecutionEngine
+from src.engine.interface import IExecutionEngine as ExecutionEngine
+from src.engine.live import LiveExecutionEngine
 from src.engine.paper import PaperExecutionEngine
 from src.engine.price_feed import DexScreenerPriceFeed
+from src.engine.priority_pool import PriorityPoolManager
 from src.engine.reentry import ReentryRiskManager
 from src.engine.risk import RiskManager
 from src.engine.tracker import PositionTracker
@@ -38,93 +41,120 @@ logger = setup_logger("vertex.main")
 class VertexBotOrchestrator:
     """Orquestrador central do ciclo de vida assíncrono do Vertex-bot."""
 
-    def __init__(self, settings: Settings) -> None:
-        self.settings: Settings = settings
-        self.db: DatabaseManager = DatabaseManager(settings.SQLITE_DB_PATH)
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        execution_mode: Literal["PAPER", "LIVE"] | None = None,
+        start_enabled: bool | None = None,
+        db: DatabaseManager | None = None,
+    ) -> None:
+        self.settings: Settings = settings if settings is not None else Settings()
+        self.execution_mode: Literal["PAPER", "LIVE"] = (
+            execution_mode if execution_mode is not None else self.settings.EXECUTION_MODE
+        )
+        self.db: DatabaseManager = db if db is not None else DatabaseManager(self.settings.SQLITE_DB_PATH)
         self.tokens_repo: TokensRepository = TokensRepository(self.db)
         self.positions_repo: PositionsRepository = PositionsRepository(self.db)
         self.orders_repo: OrdersRepository = OrdersRepository(self.db)
 
         # Provedor de Cotações Contínuas
         self.price_feed: DexScreenerPriceFeed = DexScreenerPriceFeed(
-            base_url=settings.DEXSCREENER_API_BASE_URL,
+            base_url=self.settings.DEXSCREENER_API_BASE_URL,
         )
 
         # Cliente RPC Resiliente
         self.rpc_client: ResilientRPCClient = ResilientRPCClient(
-            primary_url=settings.PRIMARY_RPC_HTTP_URL,
-            secondary_url=settings.SECONDARY_RPC_HTTP_URL,
+            primary_url=self.settings.PRIMARY_RPC_HTTP_URL,
+            secondary_url=self.settings.SECONDARY_RPC_HTTP_URL,
         )
 
-        # Camada de Segurança
         # Camada de Segurança e Dinâmica de Mercado
         self.market_validator: MarketDynamicsValidator = MarketDynamicsValidator(
-            min_volume_1h_usd=settings.MIN_VOLUME_1H_USD,
-            min_buy_ratio_5m_pct=settings.MIN_BUY_RATIO_5M_PCT,
-            min_price_change_5m_pct=settings.MIN_PRICE_CHANGE_5M_PCT,
-            min_age_hours_scalp=float(settings.MIN_TOKEN_AGE_HOURS_SCALP),
-            max_age_hours_scalp=float(settings.MAX_TOKEN_AGE_HOURS_SCALP),
-            min_age_hours_swing=float(settings.MIN_TOKEN_AGE_HOURS_SWING),
-            max_age_hours_swing=float(settings.MAX_TOKEN_AGE_HOURS_SWING),
-            min_liquidity_scalp_usd=settings.MIN_LIQUIDITY_USD,
-            min_liquidity_swing_usd=settings.MIN_LIQUIDITY_SWING_USD,
-            max_liquidity_usd=settings.MAX_LIQUIDITY_USD,
-            max_seller_to_buyer_ratio=settings.MAX_SELLER_TO_BUYER_RATIO,
-            min_liquidity_to_volume_ratio=settings.MIN_LIQUIDITY_TO_VOLUME_RATIO,
-            min_unique_traders_24h=settings.MIN_UNIQUE_TRADERS_24H,
-            max_parabolic_1h_gain_pct=settings.MAX_PARABOLIC_1H_GAIN_PCT,
+            min_volume_1h_usd=self.settings.MIN_VOLUME_1H_USD,
+            min_buy_ratio_5m_pct=self.settings.MIN_BUY_RATIO_5M_PCT,
+            min_price_change_5m_pct=self.settings.MIN_PRICE_CHANGE_5M_PCT,
+            min_age_hours_scalp=float(self.settings.MIN_TOKEN_AGE_HOURS_SCALP),
+            max_age_hours_scalp=float(self.settings.MAX_TOKEN_AGE_HOURS_SCALP),
+            min_age_hours_swing=float(self.settings.MIN_TOKEN_AGE_HOURS_SWING),
+            max_age_hours_swing=float(self.settings.MAX_TOKEN_AGE_HOURS_SWING),
+            min_liquidity_scalp_usd=self.settings.MIN_LIQUIDITY_USD,
+            min_liquidity_swing_usd=self.settings.MIN_LIQUIDITY_SWING_USD,
+            max_liquidity_usd=self.settings.MAX_LIQUIDITY_USD,
+            max_seller_to_buyer_ratio=self.settings.MAX_SELLER_TO_BUYER_RATIO,
+            min_liquidity_to_volume_ratio=self.settings.MIN_LIQUIDITY_TO_VOLUME_RATIO,
+            min_unique_traders_24h=self.settings.MIN_UNIQUE_TRADERS_24H,
+            max_parabolic_1h_gain_pct=self.settings.MAX_PARABOLIC_1H_GAIN_PCT,
         )
         self.validator: SecurityValidator = SecurityValidator(
             tokens_repo=self.tokens_repo,
             rpc_client=self.rpc_client,
-            min_liquidity_usd=settings.MIN_LIQUIDITY_USD,
-            max_top10_pct=float(settings.MAX_TOP10_HOLDERS_PCT),
-            max_tax_pct=float(settings.MAX_BUY_TAX_PCT),
+            min_liquidity_usd=self.settings.MIN_LIQUIDITY_USD,
+            max_top10_pct=float(self.settings.MAX_TOP10_HOLDERS_PCT),
+            max_tax_pct=float(self.settings.MAX_BUY_TAX_PCT),
             market_validator=self.market_validator,
-            strategy_mode=settings.TRADING_STRATEGY_MODE,
+            strategy_mode=self.settings.TRADING_STRATEGY_MODE,
         )
 
         # Auditor de Saúde Gráfica e Estrutura de Velas (Anti-Dump / 3 Velas Mínimas de 1h)
         self.chart_auditor: ChartHealthAuditor = ChartHealthAuditor(
-            geckoterminal_base_url=getattr(settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
-            dexscreener_base_url=getattr(settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
-            min_candles_required=int(getattr(settings, "CHART_MIN_CANDLES", 3)),
-            candle_timeframe=str(getattr(settings, "CHART_CANDLE_TIMEFRAME", "hour")),
-            candle_aggregate=int(getattr(settings, "CHART_CANDLE_AGGREGATE", 1)),
-            min_volume_1h_usd=Decimal(str(getattr(settings, "MIN_VOLUME_1H_USD", "3000.0"))),
-            min_liquidity_usd=settings.MIN_LIQUIDITY_USD,
+            geckoterminal_base_url=getattr(self.settings, "GECKOTERMINAL_API_BASE_URL", "https://api.geckoterminal.com"),
+            dexscreener_base_url=getattr(self.settings, "DEXSCREENER_API_BASE_URL", "https://api.dexscreener.com"),
+            min_candles_required=int(getattr(self.settings, "CHART_MIN_CANDLES", 3)),
+            candle_timeframe=str(getattr(self.settings, "CHART_CANDLE_TIMEFRAME", "hour")),
+            candle_aggregate=int(getattr(self.settings, "CHART_CANDLE_AGGREGATE", 1)),
+            min_volume_1h_usd=Decimal(str(getattr(self.settings, "MIN_VOLUME_1H_USD", "3000.0"))),
+            min_liquidity_usd=self.settings.MIN_LIQUIDITY_USD,
         )
 
-        # Camada de Execução (Paper Trading por padrão)
-        self.execution_engine: PaperExecutionEngine = PaperExecutionEngine(
+        # Motores de Execução (Simulação e Real On-Chain)
+        self.paper_engine: PaperExecutionEngine = PaperExecutionEngine(
             positions_repo=self.positions_repo,
             orders_repo=self.orders_repo,
-            initial_balance_usd=settings.PAPER_INITIAL_WALLET_USD,
-            simulated_latency_ms=settings.PAPER_SIMULATED_LATENCY_MS,
-            trailing_drop_pct=settings.TRAILING_STOP_DROP_PCT / Decimal("100.0"),
+            initial_balance_usd=self.settings.PAPER_INITIAL_WALLET_USD,
+            simulated_latency_ms=self.settings.PAPER_SIMULATED_LATENCY_MS,
+            trailing_drop_pct=self.settings.TRAILING_STOP_DROP_PCT / Decimal("100.0"),
             price_feed=self.price_feed,
+        )
+        self.live_engine: LiveExecutionEngine = LiveExecutionEngine(
+            positions_repo=self.positions_repo,
+            orders_repo=self.orders_repo,
+            solana_rpc_url=self.settings.PRIMARY_RPC_HTTP_URL,
+            solana_private_key_base58=self.settings.SOLANA_PRIVATE_KEY_BASE58 or self.settings.WALLET_PRIVATE_KEY_BASE58,
+            evm_private_key=self.settings.EVM_PRIVATE_KEY or self.settings.EVM_WALLET_PRIVATE_KEY,
+            confirm_live_trading=self.settings.CONFIRM_LIVE_TRADING,
+            price_feed=self.price_feed,
+            max_slippage_pct=self.settings.LIVE_MAX_SLIPPAGE_PCT,
+            jito_tip_lamports=self.settings.LIVE_JITO_TIP_LAMPORTS,
+            trailing_drop_pct=self.settings.TRAILING_STOP_DROP_PCT / Decimal("100.0"),
+            estimated_sol_price_usd=self.settings.ESTIMATED_SOL_PRICE_USD,
         )
 
         # Gestão de Risco
         self.risk_manager: RiskManager = RiskManager(
-            scalp_max_hold_seconds=float(getattr(settings, "SCALP_MAX_HOLD_MINUTES", 60.0)) * 60.0,
-            scalp_target_gain_pct=getattr(settings, "SCALP_TARGET_GAIN_PCT", Decimal("100.0")),
-            swing_max_hold_seconds=float(getattr(settings, "SWING_MAX_HOLD_HOURS", 24.0)) * 3600.0,
-            swing_target_gain_pct=getattr(settings, "SWING_TARGET_GAIN_PCT", Decimal("2000.0")),
-            swing_max_hourly_drop_pct=getattr(settings, "SWING_MAX_HOURLY_DROP_PCT", Decimal("15.0")),
-            trailing_drop_pct=settings.TRAILING_STOP_DROP_PCT / Decimal("100.0"),
-            emergency_stop_loss_pct=settings.EMERGENCY_STOP_LOSS_PCT / Decimal("100.0"),
-            swing_initial_stop_loss_pct=settings.SWING_INITIAL_STOP_LOSS_PCT / Decimal("100.0"),
-            swing_tier1_mult=settings.SWING_TIER1_TARGET_MULT,
-            swing_tier2_mult=settings.SWING_TIER2_TARGET_MULT,
-            swing_tier3_mult=settings.SWING_TIER3_TARGET_MULT,
-            swing_tier4_mult=settings.SWING_TIER4_TARGET_MULT,
-            swing_tier5_mult=getattr(settings, "SWING_TIER5_TARGET_MULT", Decimal("21.0")),
-            swing_trailing_drop_pct=settings.SWING_TRAILING_DROP_PCT / Decimal("100.0"),
-            break_even_gain_pct=settings.BREAK_EVEN_GAIN_PCT,
+            scalp_max_hold_seconds=float(getattr(self.settings, "SCALP_MAX_HOLD_MINUTES", 60.0)) * 60.0,
+            scalp_target_gain_pct=getattr(self.settings, "SCALP_TARGET_GAIN_PCT", Decimal("100.0")),
+            swing_max_hold_seconds=float(getattr(self.settings, "SWING_MAX_HOLD_HOURS", 24.0)) * 3600.0,
+            swing_target_gain_pct=getattr(self.settings, "SWING_TARGET_GAIN_PCT", Decimal("2000.0")),
+            swing_max_hourly_drop_pct=getattr(self.settings, "SWING_MAX_HOURLY_DROP_PCT", Decimal("15.0")),
+            trailing_drop_pct=self.settings.TRAILING_STOP_DROP_PCT / Decimal("100.0"),
+            emergency_stop_loss_pct=self.settings.EMERGENCY_STOP_LOSS_PCT / Decimal("100.0"),
+            swing_initial_stop_loss_pct=self.settings.SWING_INITIAL_STOP_LOSS_PCT / Decimal("100.0"),
+            swing_tier1_mult=self.settings.SWING_TIER1_TARGET_MULT,
+            swing_tier2_mult=self.settings.SWING_TIER2_TARGET_MULT,
+            swing_tier3_mult=self.settings.SWING_TIER3_TARGET_MULT,
+            swing_tier4_mult=self.settings.SWING_TIER4_TARGET_MULT,
+            swing_tier5_mult=getattr(self.settings, "SWING_TIER5_TARGET_MULT", Decimal("21.0")),
+            swing_trailing_drop_pct=self.settings.SWING_TRAILING_DROP_PCT / Decimal("100.0"),
+            break_even_gain_pct=self.settings.BREAK_EVEN_GAIN_PCT,
         )
-        self.position_tracker: PositionTracker = PositionTracker(
-            engine=self.execution_engine,
+        self.paper_tracker: PositionTracker = PositionTracker(
+            engine=self.paper_engine,
+            positions_repo=self.positions_repo,
+            risk_manager=self.risk_manager,
+            on_position_closed=self._handle_position_closed,
+        )
+        self.live_tracker: PositionTracker = PositionTracker(
+            engine=self.live_engine,
             positions_repo=self.positions_repo,
             risk_manager=self.risk_manager,
             on_position_closed=self._handle_position_closed,
@@ -138,17 +168,24 @@ class VertexBotOrchestrator:
 
         # Scanner (Indexado estilo Photon/DexScreener ou RAW_RPC via WebSocket)
         self.scanner = create_scanner(
-            settings=settings,
+            settings=self.settings,
             detection_queue=self.detection_queue,
         )
 
         # Gestor de Reentrada Inteligente (Anti-Falling-Knife)
         self.reentry_manager: ReentryRiskManager = ReentryRiskManager(
-            trailing_cooloff_sec=float(getattr(settings, "REENTRY_TRAILING_COOLOFF_SEC", 300.0)),
-            stoploss_cooloff_sec=float(getattr(settings, "REENTRY_STOPLOSS_COOLOFF_SEC", 1800.0)),
-            min_bounce_pct=getattr(settings, "REENTRY_MIN_BOUNCE_PCT", Decimal("3.0")),
-            max_post_exit_drop_pct=getattr(settings, "REENTRY_MAX_DROP_PCT", Decimal("25.0")),
-            min_liquidity_usd=settings.MIN_LIQUIDITY_USD,
+            trailing_cooloff_sec=float(getattr(self.settings, "REENTRY_TRAILING_COOLOFF_SEC", 300.0)),
+            stoploss_cooloff_sec=float(getattr(self.settings, "REENTRY_STOPLOSS_COOLOFF_SEC", 1800.0)),
+            min_bounce_pct=getattr(self.settings, "REENTRY_MIN_BOUNCE_PCT", Decimal("3.0")),
+            max_post_exit_drop_pct=getattr(self.settings, "REENTRY_MAX_DROP_PCT", Decimal("25.0")),
+            min_liquidity_usd=self.settings.MIN_LIQUIDITY_USD,
+        )
+
+        # Gestor do Pool de Prioridades (Ativos Aprovados e Negociados com Precedência)
+        self.priority_pool: PriorityPoolManager = PriorityPoolManager(
+            mode=str(self.execution_mode).lower(),
+            data_dir="data",
+            min_alive_liquidity_usd=self.settings.MIN_LIQUIDITY_USD,
         )
 
         self.is_running: bool = False
@@ -160,6 +197,20 @@ class VertexBotOrchestrator:
         self._entry_lock: asyncio.Lock | None = None
         self._waiting_queue_lock: asyncio.Lock | None = None
 
+        # Estados segregados de operação
+        self.paper_enabled: bool = False
+        self.live_enabled: bool = False
+        is_test = self._is_test_env()
+        if start_enabled is not None:
+            self.paper_enabled = bool(start_enabled and self.execution_mode == "PAPER")
+            self.live_enabled = bool(start_enabled and self.execution_mode == "LIVE")
+        elif is_test:
+            self.paper_enabled = (self.execution_mode == "PAPER")
+            self.live_enabled = (self.execution_mode == "LIVE")
+
+        self.paper_paused: bool = False
+        self.live_paused: bool = False
+
         # Fila de Espera de Tokens Aprovados (Aguardando Vaga ou Saldo)
         self.waiting_tokens: dict[str, dict[str, Any]] = {}
         self._load_waiting_tokens()
@@ -167,12 +218,44 @@ class VertexBotOrchestrator:
         # Restaura configurações persistidas anteriormente se existirem em disco
         self._load_persisted_config()
 
+    @property
+    def execution_engine(self) -> ExecutionEngine:
+        """Motor de execução primário (compatibilidade com interfaces e testes)."""
+        return self.live_engine if self.execution_mode == "LIVE" else self.paper_engine
+
+    @property
+    def position_tracker(self) -> PositionTracker:
+        """Tracker de posições primário (compatibilidade com interfaces e testes)."""
+        return self.live_tracker if self.execution_mode == "LIVE" else self.paper_tracker
+
+    def _is_test_env(self) -> bool:
+        """Determina se o orquestrador está rodando em ambiente de teste automatizado."""
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            return True
+        db_path_str = str(self.settings.SQLITE_DB_PATH)
+        return db_path_str == ":memory:" or db_path_str.startswith("/tmp") or "pytest" in db_path_str
+
+    def _get_mode_dir(self) -> Path:
+        """Retorna o diretório base de arquivos persistidos isolados pelo modo."""
+        m = self.execution_mode.lower()
+        if self._is_test_env():
+            db_path_str = str(self.settings.SQLITE_DB_PATH)
+            if db_path_str != ":memory:":
+                d = Path(db_path_str).parent / m
+                d.mkdir(parents=True, exist_ok=True)
+                return d
+        d = Path(f"data/{m}")
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def _get_waiting_tokens_path(self) -> Path:
-        """Caminho do arquivo JSON de tokens aprovados em fila de espera."""
-        db_path = Path(getattr(self.settings, "SQLITE_DB_PATH", "data/vertex_bot.db"))
-        if db_path.parent != Path("data") and db_path.parent != Path("."):
-            return db_path.parent / "waiting_tokens.json"
-        return Path("data/waiting_tokens.json")
+        """Caminho do arquivo JSON de tokens aprovados em fila de espera do modo."""
+        p = self._get_mode_dir() / "waiting_tokens.json"
+        if not p.exists() and self.execution_mode == "PAPER" and not self._is_test_env():
+            fallback = Path("data/waiting_tokens.json")
+            if fallback.exists():
+                return fallback
+        return p
 
     def _load_waiting_tokens(self) -> None:
         """Carrega tokens aprovados em espera salvos em disco."""
@@ -183,7 +266,7 @@ class VertexBotOrchestrator:
             raw = json.loads(w_file.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
                 self.waiting_tokens = raw
-                logger.info("⏳ [FILA DE ESPERA RESTAURADA] %d tokens carregados de %s", len(self.waiting_tokens), w_file)
+                logger.info("⏳ [FILA DE ESPERA RESTAURADA (%s)] %d tokens carregados de %s", self.execution_mode, len(self.waiting_tokens), w_file)
         except Exception as exc:
             logger.debug("Falha ao ler %s: %s", w_file, exc)
 
@@ -195,26 +278,48 @@ class VertexBotOrchestrator:
             tmp_path = w_file.with_suffix(".tmp")
             tmp_path.write_text(json.dumps(self.waiting_tokens, indent=2), encoding="utf-8")
             tmp_path.replace(w_file)
+            if self.execution_mode == "PAPER" and not self._is_test_env() and w_file != Path("data/waiting_tokens.json"):
+                legacy = Path("data/waiting_tokens.json")
+                legacy.write_text(json.dumps(self.waiting_tokens, indent=2), encoding="utf-8")
         except Exception as exc:
             logger.debug("Falha ao salvar %s: %s", w_file, exc)
 
     def _get_config_path(self) -> Path:
-        """Caminho do arquivo JSON de configurações persistidas."""
-        db_path = Path(getattr(self.settings, "SQLITE_DB_PATH", "data/vertex_bot.db"))
-        if db_path.parent != Path("data") and db_path.parent != Path("."):
-            return db_path.parent / "bot_config.json"
-        return Path("data/bot_config.json")
+        """Caminho do arquivo JSON de configurações persistidas do modo."""
+        p = self._get_mode_dir() / "bot_config.json"
+        if not p.exists() and self.execution_mode == "PAPER" and not self._is_test_env():
+            fallback = Path("data/bot_config.json")
+            if fallback.exists():
+                return fallback
+        return p
+
+    def _get_control_path(self) -> Path:
+        """Caminho do arquivo de comando IPC do modo."""
+        p = self._get_mode_dir() / "bot_control.json"
+        if not p.exists() and self.execution_mode == "PAPER" and not self._is_test_env():
+            fallback = Path("data/bot_control.json")
+            if fallback.exists():
+                return fallback
+        return p
+
+    def _get_status_path(self) -> Path:
+        """Caminho do arquivo de status de telemetria do modo."""
+        return self._get_mode_dir() / "bot_status.json"
 
     def _get_paper_session_path(self) -> Path:
         """Caminho do arquivo de sessão simulada."""
-        db_path = Path(getattr(self.settings, "SQLITE_DB_PATH", "data/vertex_bot.db"))
-        if db_path.parent != Path("data") and db_path.parent != Path("."):
-            return db_path.parent / "paper_session.json"
-        return Path("data/paper_session.json")
+        p = self._get_mode_dir() / "paper_session.json"
+        if not p.exists() and self.execution_mode == "PAPER" and not self._is_test_env():
+            fallback = Path("data/paper_session.json")
+            if fallback.exists():
+                return fallback
+        return p
 
     def _load_persisted_config(self) -> None:
         """Carrega e aplica configurações previamente salvas pelo usuário no Dashboard."""
         cfg_file = self._get_config_path()
+        if self._is_test_env() and (not cfg_file.exists() or str(cfg_file).startswith("data/")):
+            return
         if not cfg_file.exists():
             return
         try:
@@ -224,19 +329,29 @@ class VertexBotOrchestrator:
                 if raw.get("max_token_age_hours") == 3.0 and strat_mode in ("DUAL", "SCALP_ONLY"):
                     raw["max_token_age_hours"] = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
                 self._apply_config_payload(raw, save_to_disk=False)
-                logger.info("⚙️ [CONFIGURAÇÕES PERSISTIDAS RESTAURADAS] data/bot_config.json aplicado com sucesso.")
+                logger.info("⚙️ [CONFIGURAÇÕES PERSISTIDAS RESTAURADAS] %s aplicado com sucesso.", cfg_file)
         except Exception as exc:
-            logger.warning("Falha ao restaurar data/bot_config.json: %s", exc)
+            logger.warning("Falha ao restaurar %s: %s", cfg_file, exc)
 
     def _save_persisted_config(self) -> None:
-        """Salva as configurações atuais em data/bot_config.json para sobrevivência a reinicializações."""
+        """Salva as configurações atuais em bot_config.json para sobrevivência a reinicializações."""
         cfg_file = self._get_config_path()
         try:
             cfg_file.parent.mkdir(parents=True, exist_ok=True)
+            wallet_usd_val = float(
+                getattr(
+                    self.execution_engine,
+                    "balance_usd",
+                    getattr(self.execution_engine, "_last_known_balance_usd", Decimal("0.0")),
+                )
+            )
             payload = {
+                "mode": self.execution_mode,
                 "paper_buy_amount_usd": float(self.settings.PAPER_BUY_AMOUNT_USD),
+                "live_buy_amount_usd": float(self.settings.LIVE_BUY_AMOUNT_USD),
                 "max_concurrent_positions": int(self.settings.MAX_CONCURRENT_POSITIONS),
-                "wallet_balance_usd": float(self.execution_engine.balance_usd),
+                "live_max_concurrent_positions": int(self.settings.LIVE_MAX_CONCURRENT_POSITIONS),
+                "wallet_balance_usd": wallet_usd_val,
                 "paper_initial_wallet_usd": float(self.settings.PAPER_INITIAL_WALLET_USD),
                 "min_trade_amount_usd": float(self.settings.MIN_TRADE_AMOUNT_USD),
                 "max_token_age_hours": float(self.settings.MAX_TOKEN_AGE_HOURS),
@@ -244,6 +359,7 @@ class VertexBotOrchestrator:
                 "trailing_stop_drop_pct": float(self.settings.TRAILING_STOP_DROP_PCT),
                 "emergency_stop_loss_pct": float(self.settings.EMERGENCY_STOP_LOSS_PCT),
                 "max_slippage_pct": float(self.settings.MAX_SLIPPAGE_PCT),
+                "live_max_slippage_pct": float(self.settings.LIVE_MAX_SLIPPAGE_PCT),
                 "reentry_trailing_cooloff_min": float(self.settings.REENTRY_TRAILING_COOLOFF_SEC) / 60.0,
                 "reentry_stoploss_cooloff_min": float(self.settings.REENTRY_STOPLOSS_COOLOFF_SEC) / 60.0,
                 "reentry_min_bounce_pct": float(self.settings.REENTRY_MIN_BOUNCE_PCT),
@@ -270,30 +386,48 @@ class VertexBotOrchestrator:
                 "max_top10_holders_pct": float(getattr(self.settings, "MAX_TOP10_HOLDERS_PCT", 15.0)),
                 "min_liquidity_usd": float(getattr(self.settings, "MIN_LIQUIDITY_USD", 5000.0)),
             }
-            cfg_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            logger.info("💾 Configurações persistidas salvas em data/bot_config.json")
+            tmp_path = cfg_file.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            tmp_path.replace(cfg_file)
+            if self.execution_mode == "PAPER" and not self._is_test_env() and cfg_file != Path("data/bot_config.json"):
+                legacy_file = Path("data/bot_config.json")
+                legacy_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            logger.info("💾 Configurações persistidas salvas em %s", cfg_file)
         except Exception as exc:
-            logger.warning("Falha ao gravar data/bot_config.json: %s", exc)
+            logger.warning("Falha ao gravar %s: %s", cfg_file, exc)
 
     async def initialize(self) -> None:
         """Inicializa banco de dados e carrega posições abertas pré-existentes."""
+        """Inicializa banco de dados e carrega posições abertas pré-existentes de ambos os modos."""
         await self.db.initialize()
+        self._load_waiting_tokens()
 
         # No modo PAPER, inicia sempre um novo teste de simulação do zero (limpando posições e ordens),
         # mas preservando os tokens_catalogados (inteligência de triagem e rejeições).
-        if self.settings.EXECUTION_MODE == "PAPER":
-            logger.info("Modo PAPER: iniciando novo teste simulado limpo (zerando posições e ordens anteriores)...")
+        if self.execution_mode == "PAPER":
+            logger.info("Modo PAPER: iniciando novo teste simulado limpo (zerando posições, ordens e saldo da carteira)...")
             await self.positions_repo.clear_paper_trading_data()
-            self._write_paper_session_state()
+            if not self._is_test_env():
+                self.settings.PAPER_INITIAL_WALLET_USD = Decimal("0.0")
+                if hasattr(self.execution_engine, "balance_usd"):
+                    self.execution_engine.balance_usd = Decimal("0.0")
+                self.paper_engine.balance_usd = Decimal("0.0")
+                self._save_persisted_config()
+            self._write_paper_session_state(initial_balance=self.paper_engine.balance_usd)
+        # Restaura posições abertas para PAPER e LIVE de forma isolada
+        open_paper = await self.positions_repo.get_open_positions(mode="PAPER")
+        for pos in open_paper:
+            await self.paper_tracker.register_position(pos)
 
-        open_positions = await self.positions_repo.get_open_positions()
-        for pos in open_positions:
-            await self.position_tracker.register_position(pos)
+        open_live = await self.positions_repo.get_open_positions(mode="LIVE")
+        for pos in open_live:
+            await self.live_tracker.register_position(pos)
+
         await self.reconcile_wallet_balance()
         logger.info(
-            "Inicialização concluída. Modo: %s | Posições ativas restauradas: %d",
-            self.settings.EXECUTION_MODE,
-            len(open_positions),
+            "Inicialização concluída. Posições ativas restauradas: Paper=%d, Live=%d",
+            len(open_paper),
+            len(open_live),
         )
 
     def _write_paper_session_state(self, initial_balance: Decimal | None = None) -> None:
@@ -312,26 +446,110 @@ class VertexBotOrchestrator:
         except Exception as exc:
             logger.debug("Não foi possível gravar paper_session.json: %s", exc)
 
+    async def start_paper(self) -> None:
+        """Inicia operações simuladas (PAPER)."""
+        logger.info("▶️ [MODO SIMULAÇÃO ATIVADO] Iniciando operações simuladas...")
+        self.paper_enabled = True
+        self.paper_paused = False
+        await self.reconcile_wallet_balance()
+        self._write_heartbeat_sync(self.is_running)
+
+    def pause_paper(self) -> None:
+        """Pausa abertura de novas posições simuladas."""
+        self.paper_paused = True
+        if self.execution_mode == "PAPER":
+            self.is_paused = True
+        logger.info("⏸️ [SIMULAÇÃO PAUSADA] Novas entradas simuladas suspensas.")
+        self._write_heartbeat_sync(self.is_running)
+
+    def resume_paper(self) -> None:
+        """Retoma operações simuladas."""
+        self.paper_paused = False
+        if self.execution_mode == "PAPER":
+            self.is_paused = False
+        logger.info("▶️ [SIMULAÇÃO RETOMADA] Abertura de posições simuladas reativada.")
+        self._write_heartbeat_sync(self.is_running)
+
+    async def stop_paper(self) -> None:
+        """Encerra a simulação: limpa dados simulados da carteira sem fechar o bot."""
+        logger.info("⏹️ [SIMULAÇÃO ENCERRADA] Desativando modo simulado e zerando dados de simulação...")
+        self.paper_enabled = False
+        self.paper_paused = False
+        if self.execution_mode == "PAPER":
+            self.is_paused = False
+        self.paper_tracker.active_positions.clear()
+        await self.positions_repo.clear_paper_trading_data()
+        self.reentry_manager.clear_history()
+        self.waiting_tokens.clear()
+        self._save_waiting_tokens()
+        self.settings.PAPER_INITIAL_WALLET_USD = Decimal("0.0")
+        if hasattr(self.execution_engine, "balance_usd"):
+            self.execution_engine.balance_usd = Decimal("0.0")
+        self.paper_engine.balance_usd = Decimal("0.0")
+        self._write_paper_session_state(initial_balance=Decimal("0.0"))
+        self._save_persisted_config()
+        self._write_heartbeat_sync(self.is_running)
+        logger.info("Banca de simulação zerada para $0.00. Bot permanece ativo.")
+
+    async def start_live(self) -> None:
+        """Inicia operações reais on-chain (LIVE) se houver carteira conectada."""
+        if not self.live_engine.has_connected_wallet():
+            raise ValueError("Nenhuma carteira real conectada. Conecte uma carteira Solana ou EVM antes de iniciar operações reais.")
+        logger.info("🔴 [MODO REAL ATIVADO] Iniciando operações reais on-chain...")
+        self.live_enabled = True
+        self.live_paused = False
+        if self.execution_mode == "LIVE":
+            self.is_paused = False
+        self._write_heartbeat_sync(self.is_running)
+
+    def pause_live(self) -> None:
+        """Pausa abertura de novas posições reais."""
+        self.live_paused = True
+        if self.execution_mode == "LIVE":
+            self.is_paused = True
+        logger.info("⏸️ [OPERAÇÕES REAIS PAUSADAS] Novas entradas reais suspensas.")
+        self._write_heartbeat_sync(self.is_running)
+
+    def resume_live(self) -> None:
+        """Retoma operações reais."""
+        self.live_paused = False
+        if self.execution_mode == "LIVE":
+            self.is_paused = False
+        logger.info("▶️ [OPERAÇÕES REAIS RETOMADAS] Abertura de posições reais reativada.")
+        self._write_heartbeat_sync(self.is_running)
+
+    async def stop_live(self) -> None:
+        """Encerra operações reais (desativa novas compras em modo real sem fechar o bot)."""
+        logger.info("⏹️ [OPERAÇÕES REAIS ENCERRADAS] Novas compras em modo real desativadas.")
+        self.live_enabled = False
+        self.live_paused = False
+        self._write_heartbeat_sync(self.is_running)
+
     def pause(self) -> None:
         """Pausa a abertura de novas posições pelo bot."""
+        """Pausa a abertura de novas posições pelo bot em todos os modos."""
         self.is_paused = True
+        self.paper_paused = True
+        self.live_paused = True
         logger.info("⏸️ [BOT PAUSADO] Novas entradas suspensas. Monitoramento de posições abertas permanece ativo.")
 
     def resume(self) -> None:
         """Retoma as operações normais do bot."""
         self.is_paused = False
+        self.paper_paused = False
+        self.live_paused = False
         logger.info("▶️ [BOT RETOMADO] Abertura de posições e triagem reativadas com sucesso.")
 
     def deposit_wallet(self, amount_usd: Decimal) -> Decimal:
         """Adiciona capital simulado à carteira no modo PAPER."""
-        self.execution_engine.balance_usd += amount_usd
+        self.paper_engine.balance_usd += amount_usd
         self.settings.PAPER_INITIAL_WALLET_USD += amount_usd
         self._write_paper_session_state(initial_balance=self.settings.PAPER_INITIAL_WALLET_USD)
         self._save_persisted_config()
         logger.info(
-            "💵 [DEPÓSITO SIMULADO] +$%.2f adicionados à carteira. Saldo atual: $%.2f (Banca Base: $%.2f)",
+            "💵 [DEPÓSITO SIMULADO] +$%.2f adicionados à carteira simulada. Saldo atual: $%.2f (Banca Base: $%.2f)",
             amount_usd,
-            self.execution_engine.balance_usd,
+            self.paper_engine.balance_usd,
             self.settings.PAPER_INITIAL_WALLET_USD,
         )
         try:
@@ -340,12 +558,15 @@ class VertexBotOrchestrator:
                 asyncio.create_task(self._try_fill_slots_from_waiting_queue())
         except RuntimeError:
             pass
-        return self.execution_engine.balance_usd
+        return Decimal(str(self.paper_engine.balance_usd))
 
-    async def close_position_manually(self, position_id: int) -> bool:
+    async def close_position_manually(self, position_id: int, mode: str | None = None) -> bool:
         """Encerra manualmente uma posição ativa a pedido do usuário pelo dashboard."""
         logger.info("🛑 [COMANDO MANUAL] Encerrando posição #%d a mercado...", position_id)
-        success = await self.position_tracker.close_position_manually(position_id)
+        if (mode and mode.upper() == "LIVE") or position_id in self.live_tracker.active_positions:
+            success = await self.live_tracker.close_position_manually(position_id)
+        else:
+            success = await self.paper_tracker.close_position_manually(position_id)
         if success:
             if hasattr(self, "dashboard_server") and self.dashboard_server:
                 broadcast = getattr(self.dashboard_server, "broadcast_event", None)
@@ -361,35 +582,45 @@ class VertexBotOrchestrator:
         position_id: int | None = None,
         token_address: str | None = None,
         strategy_type: str = "SCALP",
+        mode: str = "PAPER",
     ) -> tuple[bool, str]:
         """Abre manualmente uma nova posição para o token informado ou baseado em uma posição existente."""
         resolved_addr = token_address
         resolved_strat = strategy_type
+        target_mode = mode.upper()
 
         if position_id is not None:
             db_pos = await self.positions_repo.get_by_id(position_id)
             if db_pos:
                 resolved_addr = db_pos.token_address
                 resolved_strat = db_pos.strategy_type or strategy_type
+                if db_pos.mode:
+                    target_mode = db_pos.mode.upper()
 
         if not resolved_addr:
             return False, "Endereço de token inválido ou não informado."
 
-        max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 2))
-        active_count = len(self.position_tracker.active_positions)
+        tracker = self.live_tracker if target_mode == "LIVE" else self.paper_tracker
+        engine = self.live_engine if target_mode == "LIVE" else self.paper_engine
+
+        if target_mode == "LIVE" and not self.live_engine.has_connected_wallet():
+            return False, "Nenhuma carteira real conectada para operações LIVE."
+
+        max_positions = int(getattr(self.settings, "LIVE_MAX_CONCURRENT_POSITIONS" if target_mode == "LIVE" else "MAX_CONCURRENT_POSITIONS", 2))
+        active_count = len(tracker.active_positions)
         if active_count >= max_positions:
             msg = f"Limite de posições concorrentes atingido ({active_count}/{max_positions}). Encerre uma posição antes de abrir outra."
-            logger.warning("🚫 [COMPRA MANUAL BLOQUEADA] %s", msg)
+            logger.warning("🚫 [COMPRA MANUAL BLOQUEADA (%s)] %s", target_mode, msg)
             return False, msg
 
-        configured_buy = Decimal(str(getattr(self.settings, "PAPER_BUY_AMOUNT_USD", "1.0")))
+        configured_buy = Decimal(str(getattr(self.settings, "LIVE_BUY_AMOUNT_USD" if target_mode == "LIVE" else "PAPER_BUY_AMOUNT_USD", "1.0")))
         min_trade = Decimal(str(getattr(self.settings, "MIN_TRADE_AMOUNT_USD", "1.0")))
         buy_amount = configured_buy if configured_buy > Decimal("0.0") else min_trade
-        available_cash = self.execution_engine.balance_usd
+        available_cash = engine.balance_usd
 
         if available_cash < buy_amount:
             msg = f"Saldo em caixa insuficiente: Disponível ${available_cash:.2f} < ${buy_amount:.2f} necessário."
-            logger.warning("🚫 [COMPRA MANUAL BLOQUEADA] %s", msg)
+            logger.warning("🚫 [COMPRA MANUAL BLOQUEADA (%s)] %s", target_mode, msg)
             return False, msg
 
         token_meta = await self.tokens_repo.get_token_metadata_by_address(resolved_addr)
@@ -403,13 +634,14 @@ class VertexBotOrchestrator:
             )
 
         logger.info(
-            "🚀 [COMPRA MANUAL] Abrindo posição %s para %s ($%.2f)...",
+            "🚀 [COMPRA MANUAL (%s)] Abrindo posição %s para %s ($%.2f)...",
+            target_mode,
             resolved_strat,
             token_meta.symbol or resolved_addr[:8],
             buy_amount,
         )
 
-        pos = await self.execution_engine.execute_buy(
+        pos = await engine.execute_buy(
             token_meta,
             amount_usd=buy_amount,
             strategy_type=resolved_strat,
@@ -417,15 +649,15 @@ class VertexBotOrchestrator:
 
         if pos:
             self.telemetry.record_trade_opened()
-            await self.position_tracker.register_position(pos)
+            await tracker.register_position(pos)
             if hasattr(self, "dashboard_server") and self.dashboard_server:
                 broadcast = getattr(self.dashboard_server, "broadcast_event", None)
                 if callable(broadcast):
                     try:
-                        await broadcast("trade", {"action": "manual_buy", "position_id": pos.id})
+                        await broadcast("trade", {"action": "manual_buy", "position_id": pos.id, "mode": target_mode})
                     except Exception:
                         pass
-            return True, f"Posição #{pos.id} aberta com sucesso para {token_meta.symbol or resolved_addr[:8]} ({resolved_strat})!"
+            return True, f"Posição #{pos.id} ({target_mode}) aberta com sucesso para {token_meta.symbol or resolved_addr[:8]} ({resolved_strat})!"
         else:
             return False, "Falha na execução da ordem de compra pelo motor de execução."
 
@@ -444,35 +676,53 @@ class VertexBotOrchestrator:
 
     async def reconcile_wallet_balance(self) -> Decimal:
         """Reconcilia o saldo de caixa em memória garantindo exatidão contábil (Caixa = Banca + PnL - Alocado)."""
-        if self.settings.EXECUTION_MODE != "PAPER":
-            return self.execution_engine.balance_usd
+        if self.execution_mode != "PAPER":
+            if hasattr(self.execution_engine, "get_wallet_balance_usd"):
+                bal = await self.execution_engine.get_wallet_balance_usd()
+                self._write_heartbeat_sync(self.is_running)
+                return Decimal(str(bal))
+            return Decimal("0.0")
 
         try:
             pnl_data = await self.positions_repo.get_pnl_summary(
+                mode="PAPER",
                 initial_wallet_usd=float(self.settings.PAPER_INITIAL_WALLET_USD),
             )
             active_capital = Decimal(str(pnl_data.get("active_capital_usd", 0.0)))
             realized_pnl = Decimal(str(pnl_data.get("total_pnl_usd", 0.0)))
             true_cash = max(Decimal("0.0"), self.settings.PAPER_INITIAL_WALLET_USD + realized_pnl - active_capital)
-            self.execution_engine.balance_usd = true_cash
+            if hasattr(self.execution_engine, "balance_usd"):
+                self.execution_engine.balance_usd = true_cash
+            self.paper_engine.balance_usd = true_cash
+
+            if self.live_engine.has_connected_wallet():
+                await self.live_engine.get_wallet_balance_usd()
+
             self._write_heartbeat_sync(self.is_running)
             return true_cash
         except Exception as exc:
             logger.warning("Falha ao reconciliar saldo de carteira: %s", exc)
-            return self.execution_engine.balance_usd
+            return getattr(self.execution_engine, "balance_usd", Decimal("0.0"))
 
     async def restart_paper_session(self, new_balance: Decimal | None = None) -> None:
         """Reinicia a sessão simulada: limpa posições, ordens, zera IDs para #1 e reinicia balanço."""
+        if self.execution_mode != "PAPER":
+            logger.warning("Tentativa de reiniciar sessão simulada em modo LIVE ignorada por segurança.")
+            return
+
         logger.info("🔄 [REINÍCIO DE SIMULAÇÃO] Limpando dados de trades e reiniciando sessão pelo Dashboard...")
         self.position_tracker.active_positions.clear()
+        self.paper_tracker.active_positions.clear()
         await self.positions_repo.clear_paper_trading_data()
         self.reentry_manager.clear_history()
         self.waiting_tokens.clear()
         self._save_waiting_tokens()
 
-        target_balance = new_balance if new_balance is not None else self.settings.PAPER_INITIAL_WALLET_USD
+        target_balance = new_balance if new_balance is not None else Decimal("0.0")
         self.settings.PAPER_INITIAL_WALLET_USD = target_balance
-        self.execution_engine.balance_usd = target_balance
+        if hasattr(self.execution_engine, "balance_usd"):
+            self.execution_engine.balance_usd = target_balance
+        self.paper_engine.balance_usd = target_balance
         self._write_paper_session_state(initial_balance=target_balance)
         self._save_persisted_config()
         self._write_heartbeat_sync(self.is_running)
@@ -548,16 +798,19 @@ class VertexBotOrchestrator:
         if wallet_val_raw is not None:
             try:
                 new_wallet = Decimal(str(wallet_val_raw))
-                if new_wallet > Decimal("0.0"):
+                if new_wallet >= Decimal("0.0"):
                     self.settings.PAPER_INITIAL_WALLET_USD = new_wallet
                     allocated = sum(
                         (p.allocated_capital_usd for p in self.position_tracker.active_positions.values()),
                         Decimal("0.0"),
                     )
-                    self.execution_engine.balance_usd = max(Decimal("0.0"), new_wallet - allocated)
+                    avail = max(Decimal("0.0"), new_wallet - allocated)
+                    if hasattr(self.execution_engine, "balance_usd"):
+                        self.execution_engine.balance_usd = avail
+                    self.paper_engine.balance_usd = avail
                     self._write_paper_session_state(initial_balance=new_wallet)
                     self._write_heartbeat_sync(self.is_running)
-                    logger.info("💰 Saldo da carteira atualizado para $%.2f (Disponível: $%.2f, Alocado: $%.2f)", new_wallet, self.execution_engine.balance_usd, allocated)
+                    logger.info("💰 Saldo da carteira atualizado para $%.2f (Disponível: $%.2f, Alocado: $%.2f)", new_wallet, avail, allocated)
             except Exception as exc:
                 logger.warning("Falha ao atualizar saldo da carteira: %s", exc)
         if payload.get("min_trade_amount_usd") is not None:
@@ -569,6 +822,21 @@ class VertexBotOrchestrator:
         if payload.get("max_token_age_hours") is not None:
             self.settings.MAX_TOKEN_AGE_HOURS = float(payload["max_token_age_hours"])
             self._update_scanner_max_age(self.settings.MAX_TOKEN_AGE_HOURS)
+        if payload.get("live_buy_amount_usd") is not None:
+            live_buy = Decimal(str(payload["live_buy_amount_usd"]))
+            if live_buy > Decimal("0.0"):
+                self.settings.LIVE_BUY_AMOUNT_USD = live_buy
+        if payload.get("live_max_concurrent_positions") is not None:
+            self.settings.LIVE_MAX_CONCURRENT_POSITIONS = int(payload["live_max_concurrent_positions"])
+        if payload.get("live_max_slippage_pct") is not None:
+            self.settings.LIVE_MAX_SLIPPAGE_PCT = Decimal(str(payload["live_max_slippage_pct"]))
+            if hasattr(self, "live_engine") and self.live_engine:
+                self.live_engine.max_slippage_pct = self.settings.LIVE_MAX_SLIPPAGE_PCT / Decimal("100.0")
+        if payload.get("live_jito_tip_lamports") is not None:
+            self.settings.LIVE_JITO_TIP_LAMPORTS = int(payload["live_jito_tip_lamports"])
+            if hasattr(self, "live_engine") and self.live_engine:
+                self.live_engine.jito_tip_lamports = self.settings.LIVE_JITO_TIP_LAMPORTS
+
 
     def _apply_risk_config(self, payload: dict[str, Any]) -> None:
         """Aplica parâmetros de risco (break-even, trailing stop, stop loss, scalp timing/alvo, dual-track e swing ratchet)."""
@@ -772,14 +1040,28 @@ class VertexBotOrchestrator:
 
     def _write_heartbeat_sync(self, is_running: bool) -> None:
         """Emite arquivo de status atômico em disco para detecção de liveness pelo Dashboard avulso."""
+        """Emite arquivos de status atômicos em disco para PAPER e LIVE para consumo pelo Dashboard."""
         try:
-            status_file = Path("data/bot_status.json")
+            status_file = self._get_status_path()
             status_file.parent.mkdir(parents=True, exist_ok=True)
+            wallet_usd_val = float(
+                getattr(
+                    self.execution_engine,
+                    "balance_usd",
+                    getattr(self.execution_engine, "_last_known_balance_usd", Decimal("0.0")),
+                )
+            )
+            initial_val = float(
+                self.settings.PAPER_INITIAL_WALLET_USD
+                if self.execution_mode == "PAPER"
+                else wallet_usd_val
+            )
             payload = {
                 "is_running": is_running,
                 "is_paused": self.is_paused,
-                "wallet_balance_usd": float(self.execution_engine.balance_usd),
-                "initial_wallet_usd": float(self.settings.PAPER_INITIAL_WALLET_USD),
+                "mode": self.execution_mode,
+                "wallet_balance_usd": wallet_usd_val,
+                "initial_wallet_usd": initial_val,
                 "active_positions_count": len(self.position_tracker.active_positions),
                 "pid": os.getpid(),
                 "timestamp": datetime.now(UTC).timestamp(),
@@ -787,6 +1069,63 @@ class VertexBotOrchestrator:
             tmp_file = status_file.with_suffix(".tmp")
             tmp_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             tmp_file.replace(status_file)
+            # 1. Status do Modo Simulação (PAPER)
+            if not self._is_test_env() or self.execution_mode == "PAPER":
+                paper_status_file = Path("data/paper/bot_status.json")
+                paper_status_file.parent.mkdir(parents=True, exist_ok=True)
+                paper_payload = {
+                    "is_running": is_running and self.paper_enabled,
+                    "is_paused": self.paper_paused,
+                    "mode": "PAPER",
+                    "wallet_balance_usd": float(self.paper_engine.balance_usd),
+                    "initial_wallet_usd": float(self.settings.PAPER_INITIAL_WALLET_USD),
+                    "active_positions_count": len(self.paper_tracker.active_positions),
+                    "pid": os.getpid(),
+                    "timestamp": datetime.now(UTC).timestamp(),
+                }
+                tmp_paper = paper_status_file.with_suffix(".tmp")
+                tmp_paper.write_text(json.dumps(paper_payload, indent=2), encoding="utf-8")
+                tmp_paper.replace(paper_status_file)
+
+            if self.execution_mode == "PAPER":
+                legacy_file = Path("data/bot_status.json")
+                legacy_file.parent.mkdir(parents=True, exist_ok=True)
+                legacy_tmp = legacy_file.with_suffix(".tmp")
+                legacy_tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                legacy_tmp.write_text(json.dumps(paper_payload, indent=2), encoding="utf-8")
+                legacy_tmp.replace(legacy_file)
+
+            # 2. Status do Modo Operações Reais (LIVE)
+            if not self._is_test_env() or self.execution_mode == "LIVE":
+                live_status_file = Path("data/live/bot_status.json")
+                live_status_file.parent.mkdir(parents=True, exist_ok=True)
+                live_balance = float(getattr(self.live_engine, "_last_known_balance_usd", Decimal("0.0")))
+                live_payload = {
+                    "is_running": is_running and self.live_enabled,
+                    "is_paused": self.live_paused,
+                    "mode": "LIVE",
+                    "has_connected_wallet": self.live_engine.has_connected_wallet(),
+                    "wallet_balance_usd": live_balance,
+                    "initial_wallet_usd": live_balance,
+                    "active_positions_count": len(self.live_tracker.active_positions),
+                    "wallets": [
+                        {
+                            "chain": "solana",
+                            "address": self.live_engine.solana_public_key or "",
+                            "is_connected": self.live_engine._solana_keypair is not None,
+                        },
+                        {
+                            "chain": "evm",
+                            "address": self.live_engine.evm_address or "",
+                            "is_connected": self.live_engine._evm_private_key is not None,
+                        },
+                    ],
+                    "pid": os.getpid(),
+                    "timestamp": datetime.now(UTC).timestamp(),
+                }
+                tmp_live = live_status_file.with_suffix(".tmp")
+                tmp_live.write_text(json.dumps(live_payload, indent=2), encoding="utf-8")
+                tmp_live.replace(live_status_file)
         except Exception as exc:
             logger.debug("Erro ao emitir heartbeat do bot: %s", exc)
 
@@ -797,21 +1136,50 @@ class VertexBotOrchestrator:
             await asyncio.sleep(1.5)
 
     def _read_ipc_command_sync(self) -> dict[str, Any] | None:
-        """Lê o arquivo de comando IPC se existir."""
-        control_file = Path("data/bot_control.json")
+        """Lê o arquivo de comando IPC se existir com validação estrita de modo."""
+        control_file = self._get_control_path()
+        if not control_file.exists() and self.execution_mode == "PAPER":
+            fallback = Path("data/bot_control.json")
+            if fallback.exists():
+                control_file = fallback
         if not control_file.exists():
             return None
         try:
             content = control_file.read_text(encoding="utf-8")
             data = json.loads(content)
             if isinstance(data, dict):
+                # Se o comando IPC especificar um modo e for diferente deste orquestrador, ignora!
+                cmd_mode = str(data.get("mode", "")).upper()
+                if cmd_mode and cmd_mode != self.execution_mode:
+                    return None
                 return data
         except Exception as exc:
-            logger.debug("Erro ao ler data/bot_control.json: %s", exc)
+            logger.debug("Erro ao ler %s: %s", control_file, exc)
+        """Lê o arquivo de comando IPC se existir com verificação de caminhos de controle."""
+        candidates = [
+            self._get_control_path(),
+            Path("data/paper/bot_control.json"),
+            Path("data/live/bot_control.json"),
+            Path("data/bot_control.json"),
+        ]
+        for control_file in candidates:
+            if control_file.exists():
+                try:
+                    content = control_file.read_text(encoding="utf-8")
+                    data = json.loads(content)
+                    if isinstance(data, dict):
+                        return data
+                except Exception as exc:
+                    logger.debug("Erro ao ler %s: %s", control_file, exc)
         return None
 
     async def _ipc_command_worker(self) -> None:
         """Escuta comandos IPC gravados pelo Dashboard executando em processo avulso."""
+        # Ignora comando que já estava gravado antes de ligar o bot para não disparar ações antigas
+        initial_cmd = await asyncio.to_thread(self._read_ipc_command_sync)
+        if initial_cmd and "command_id" in initial_cmd:
+            self._last_handled_ipc_id = str(initial_cmd["command_id"])
+
         while self.is_running:
             try:
                 cmd_data = await asyncio.to_thread(self._read_ipc_command_sync)
@@ -819,6 +1187,9 @@ class VertexBotOrchestrator:
                     cmd_id = cmd_data.get("command_id")
                     cmd_name = cmd_data.get("command")
                     payload = cmd_data.get("payload", {})
+                    payload = dict(cmd_data.get("payload", {}))
+                    if "mode" in cmd_data and "mode" not in payload:
+                        payload["mode"] = cmd_data["mode"]
                     if cmd_id and cmd_id != self._last_handled_ipc_id:
                         self._last_handled_ipc_id = str(cmd_id)
                         logger.info("📩 [IPC RECEBIDO] Executando comando '%s' do Dashboard...", cmd_name)
@@ -844,11 +1215,26 @@ class VertexBotOrchestrator:
             pass
 
     async def _dispatch_ipc_command(self, command: str | None, payload: dict[str, Any]) -> None:
-        """Despacha a execução do comando IPC recebido."""
-        if command == "pause":
-            self.pause()
-        elif command == "resume":
-            self.resume()
+        """Despacha a execução do comando IPC recebido para os modos corretos."""
+        mode = str(payload.get("mode", "")).lower()
+        if command in ("start_paper", "start") and (mode == "paper" or not mode):
+            await self.start_paper()
+        elif command in ("start_live", "start") and mode == "live":
+            await self.start_live()
+        elif command == "stop_bot" or (command == "stop" and not mode):
+            await self.stop()
+        elif command in ("stop_paper", "stop") and mode == "paper":
+            await self.stop_paper()
+        elif command in ("stop_live", "stop") and mode == "live":
+            await self.stop_live()
+        elif command in ("pause_paper", "pause") and (mode == "paper" or not mode):
+            self.pause_paper()
+        elif command in ("pause_live", "pause") and mode == "live":
+            self.pause_live()
+        elif command in ("resume_paper", "resume") and (mode == "paper" or not mode):
+            self.resume_paper()
+        elif command in ("resume_live", "resume") and mode == "live":
+            self.resume_live()
         elif command == "reload_config":
             self._handle_ipc_reload_config(payload)
         elif command == "deposit":
@@ -867,12 +1253,10 @@ class VertexBotOrchestrator:
             )
             bal = Decimal(str(bal_str)) if bal_str is not None else None
             await self.restart_paper_session(new_balance=bal)
-        elif command == "stop":
-            await self.stop()
         elif command == "close_position":
             pos_id = payload.get("position_id")
             if pos_id is not None:
-                await self.close_position_manually(int(pos_id))
+                await self.close_position_manually(int(pos_id), mode=mode or None)
         elif command == "buy_more":
             pos_id = payload.get("position_id")
             token_addr = payload.get("token_address")
@@ -881,6 +1265,7 @@ class VertexBotOrchestrator:
                 position_id=int(pos_id) if pos_id is not None else None,
                 token_address=str(token_addr) if token_addr else None,
                 strategy_type=str(strat),
+                mode=mode or "PAPER",
             )
 
     async def start(self, run_mock_stream: bool = False) -> None:
@@ -947,7 +1332,21 @@ class VertexBotOrchestrator:
 
                 if audit.is_approved:
                     self.telemetry.record_approval()
-                    await self._evaluate_and_execute_entry(token)
+                    executed = False
+                    if self.paper_enabled and not self.paper_paused:
+                        executed = True
+                        asyncio.create_task(self._evaluate_and_execute_entry(token, mode="PAPER"))
+                    if self.live_enabled and not self.live_paused:
+                        if self.live_engine.has_connected_wallet():
+                            executed = True
+                            asyncio.create_task(self._evaluate_and_execute_entry(token, mode="LIVE"))
+                        else:
+                            logger.warning(
+                                "⚠️ [LIVE BLOQUEADO] Nenhuma carteira conectada para operações reais. Ignorando entrada real para token %s.",
+                                token.address,
+                            )
+                    if not executed and not self.paper_enabled and not self.live_enabled:
+                        logger.info("⏸️ [STANDBY] Token %s aprovado na triagem. Bot em standby (inicie Paper ou Live pela interface).", token.symbol or token.address[:8])
                 else:
                     is_pending = bool(audit.details.get("is_indexing_pending")) if isinstance(audit.details, dict) else False
                     if is_pending and hasattr(self, "scanner") and hasattr(self.scanner, "incubate_token"):
@@ -1206,10 +1605,13 @@ class VertexBotOrchestrator:
                 max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0))
             elif strat_mode == "SCALP_ONLY":
                 max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_CONSOLIDATED", 87600.0))
             else:
                 max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_CONSOLIDATED", 87600.0))
             now_utc = datetime.now(UTC)
 
+            # 1. Primeiro drena tokens que estavam ativamente aguardando vaga na fila de espera
             candidates = list(self.waiting_tokens.values())
             addrs = [c["address"] for c in candidates]
             live_prices = await self.price_feed.fetch_prices(addrs)
@@ -1247,35 +1649,99 @@ class VertexBotOrchestrator:
                                 addr,
                             )
                         else:
-                            logger.warning(
-                                "🧹 [FILA DE ESPERA PURGADA] Token %s (%s) desqualificado e purgado: %s",
-                                token_meta.symbol or addr[:8],
-                                addr,
+                            logger.info(
+                                "📉 [FILA DE ESPERA] Token %s descartado por auditoria gráfica: %s",
+                                addr[:8],
                                 chart_reason,
                             )
                         self.waiting_tokens.pop(addr, None)
                         self._save_waiting_tokens()
                         continue
 
-                await self._evaluate_and_execute_entry(token_meta)
+                logger.info(
+                    "🚀 [FILA DE ESPERA] Slot liberado! Executando entrada para token aprovado %s (%s)",
+                    token_meta.symbol or addr[:8],
+                    addr,
+                )
+                await self._locked_evaluate_and_execute_entry(token_meta)
+                self.waiting_tokens.pop(addr, None)
+                self._save_waiting_tokens()
 
-    async def _evaluate_and_execute_entry(self, token: TokenMetadata) -> None:
+            # 2. Precedência da Lista de Prioridades (Tokens Aprovados e Negociados que continuam vivos)
+            # Se ainda restarem slots disponíveis e capital, atende candidatos da Lista de Prioridades
+            if hasattr(self, "priority_pool") and self.priority_pool.count() > 0:
+                active_addrs = {p.token_address for p in self.position_tracker.active_positions.values()}
+                if hasattr(self, "live_tracker"):
+                    active_addrs.update({p.token_address for p in self.live_tracker.active_positions.values()})
+                if hasattr(self, "paper_tracker"):
+                    active_addrs.update({p.token_address for p in self.paper_tracker.active_positions.values()})
+
+                priority_list = self.priority_pool.get_all_priority_tokens()
+                eligible_priority = [
+                    p for p in priority_list
+                    if p["address"] not in active_addrs and p.get("is_active_priority") and p.get("is_alive")
+                ]
+
+                if eligible_priority:
+                    p_addrs = [p["address"] for p in eligible_priority]
+                    p_prices = await self.price_feed.fetch_prices(p_addrs)
+
+                    for p_item in eligible_priority:
+                        if not self.is_running or self.is_paused:
+                            break
+                        if len(self.position_tracker.active_positions) >= max_positions:
+                            break
+                        if self.execution_engine.balance_usd < min_required:
+                            break
+
+                        p_addr = p_item["address"]
+                        p_price = p_prices.get(p_addr) or p_prices.get(p_addr.lower())
+                        if not p_price or p_price <= Decimal("0.0"):
+                            continue
+
+                        # Atualiza saúde e verifica se o token "continua vivo"
+                        p_liq = Decimal(str(p_item.get("current_liquidity_usd", 0.0)))
+                        is_alive = self.priority_pool.update_token_health(p_addr, p_price, p_liq)
+                        if not is_alive:
+                            continue
+
+                        # Confirma se está em ponto de reentrada (repique de suporte ou cool-off encerrado)
+                        can_reenter, _ = self.reentry_manager.can_reenter(
+                            token_address=p_addr,
+                            current_price=p_price,
+                            current_liquidity_usd=p_liq,
+                        )
+                        if can_reenter:
+                            logger.info(
+                                "⭐ [PRECEDÊNCIA DE EXECUÇÃO] Token prioritário %s (%s) selecionado com prioridade máxima!",
+                                p_item.get("symbol"),
+                                p_addr[:8],
+                            )
+                            p_meta = self._build_waiting_token_meta(p_item, p_price)
+                            await self._evaluate_and_execute_entry(p_meta)
+
+    async def _evaluate_and_execute_entry(self, token: TokenMetadata, mode: str = "PAPER") -> None:
         """Avalia limites de slots, saldo e executa a compra do token aprovado com parâmetros dinâmicos."""
         if self._entry_lock is None:
             self._entry_lock = asyncio.Lock()
 
         async with self._entry_lock:
-            await self._locked_evaluate_and_execute_entry(token)
+            await self._locked_evaluate_and_execute_entry(token, mode=mode)
 
-    async def _locked_evaluate_and_execute_entry(self, token: TokenMetadata) -> None:
+    async def _locked_evaluate_and_execute_entry(self, token: TokenMetadata, mode: str = "PAPER") -> None:
         """Execução sincronizada com lock de entrada para prevenir posições duplicadas e validar mercado."""
         # 0. Sincroniza configurações mais recentes do disco para garantir conformidade com ajustes
         self._sync_config_from_disk_if_present()
+
+        target_mode = mode.upper()
+        engine: ExecutionEngine = self.live_engine if target_mode == "LIVE" else self.paper_engine
+        tracker: PositionTracker = self.live_tracker if target_mode == "LIVE" else self.paper_tracker
 
         strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
 
         # Verificação atômica de posições já abertas para o token (Piramidação / Scale-In)
         active_positions = list(self.position_tracker.active_positions.values())
+        active_positions = list(tracker.active_positions.values())
         existing_positions_for_token = [p for p in active_positions if p.token_address == token.address]
         max_positions_per_token = int(getattr(self.settings, "MAX_POSITIONS_PER_TOKEN", 2))
         min_scale_profit = Decimal(str(getattr(self.settings, "SCALE_IN_MIN_PROFIT_PCT", "5.0")))
@@ -1417,6 +1883,8 @@ class VertexBotOrchestrator:
         # 3. Verifica posições ativas e capacidade de slots por estratégia
         max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 10))
         active_positions = list(self.position_tracker.active_positions.values())
+        max_positions = int(getattr(self.settings, "LIVE_MAX_CONCURRENT_POSITIONS" if target_mode == "LIVE" else "MAX_CONCURRENT_POSITIONS", 10))
+        active_positions = list(tracker.active_positions.values())
         active_count = len(active_positions)
         active_scalp = sum(1 for p in active_positions if getattr(p, "strategy_type", "SCALP") == "SCALP")
         active_swing = sum(1 for p in active_positions if getattr(p, "strategy_type", "SCALP") == "SWING")
@@ -1431,7 +1899,8 @@ class VertexBotOrchestrator:
             and len(existing_positions_for_token) >= max_positions_per_token
         ):
             logger.info(
-                "⏸️ [POSIÇÕES JÁ ABERTA] O token %s (%s) já atingiu o teto de posições ativas (%d).",
+                "⏸️ [POSIÇÕES JÁ ABERTA (%s)] O token %s (%s) já atingiu o teto de posições ativas (%d).",
+                target_mode,
                 token.symbol or "N/A",
                 token.address,
                 max_positions_per_token,
@@ -1480,7 +1949,8 @@ class VertexBotOrchestrator:
             waiting_reason = "AGUARDANDO_SLOT"
             self._enqueue_waiting_token(token, reason=waiting_reason, eligible_strategy=target_strat)
             logger.info(
-                "⏳ [FILA DE ESPERA] Token aprovado %s (%s) aguardando slot (%s). Posições: %d/%d (Scalp: %d/%d, Swing: %d/%d)",
+                "⏳ [FILA DE ESPERA (%s)] Token aprovado %s (%s) aguardando slot (%s). Posições: %d/%d (Scalp: %d/%d, Swing: %d/%d)",
+                target_mode,
                 token.symbol or token.address[:8],
                 token.address,
                 target_strat,
@@ -1496,8 +1966,8 @@ class VertexBotOrchestrator:
         # 4. Dimensionamento de capital por posição e validação de saldo
         required_slots = (1 if open_scalp else 0) + (1 if open_swing else 0)
         min_trade = Decimal(str(getattr(self.settings, "MIN_TRADE_AMOUNT_USD", "1.0")))
-        configured_buy = Decimal(str(getattr(self.settings, "PAPER_BUY_AMOUNT_USD", "1.0")))
-        available_cash = self.execution_engine.balance_usd
+        configured_buy = Decimal(str(getattr(self.settings, "LIVE_BUY_AMOUNT_USD" if target_mode == "LIVE" else "PAPER_BUY_AMOUNT_USD", "1.0")))
+        available_cash = engine.balance_usd
 
         if configured_buy and configured_buy > Decimal("0.0"):
             base_buy_amount = configured_buy
@@ -1519,7 +1989,8 @@ class VertexBotOrchestrator:
             waiting_reason = "AGUARDANDO_SALDO"
             self._enqueue_waiting_token(token, reason=waiting_reason, eligible_strategy=target_strat)
             logger.info(
-                "⏳ [FILA DE ESPERA] Token aprovado %s (%s) aguardando saldo (%s). Caixa: $%.2f (Necessário: $%.2f)",
+                "⏳ [FILA DE ESPERA (%s)] Token aprovado %s (%s) aguardando saldo (%s). Caixa: $%.2f (Necessário: $%.2f)",
+                target_mode,
                 token.symbol or token.address[:8],
                 token.address,
                 target_strat,
@@ -1536,7 +2007,8 @@ class VertexBotOrchestrator:
         buy_amount_usd = base_buy_amount
 
         logger.info(
-            "📊 [GESTÃO DE CARTEIRA] Caixa: $%.2f | Alocando $%.2f por perna (Scalp: %s, Swing: %s | Modo: %s) na Posição #%d/%d (%s)",
+            "📊 [GESTÃO DE CARTEIRA (%s)] Caixa: $%.2f | Alocando $%.2f por perna (Scalp: %s, Swing: %s | Modo: %s) na Posição #%d/%d (%s)",
+            target_mode,
             available_cash,
             buy_amount_usd,
             "SIM" if open_scalp else "NÃO",
@@ -1549,68 +2021,84 @@ class VertexBotOrchestrator:
 
         # 6. Dispara ordens para as pernas selecionadas
         if open_scalp and open_swing:
-            await self._execute_dual_track_entry(token, buy_amount_usd)
+            await self._execute_dual_track_entry(token, buy_amount_usd, engine=engine, tracker=tracker)
         elif open_scalp:
             logger.info(
-                "🎯 [ESTRATÉGIA SCALP] Token %s qualificado para Scalp (30m-720h). Abrindo perna de Scalp.",
+                "🎯 [ESTRATÉGIA SCALP (%s)] Token %s qualificado para Scalp (30m-720h). Abrindo perna de Scalp.",
+                target_mode,
                 token.symbol or token.address[:8],
             )
-            pos_scalp = await self.execution_engine.execute_buy(
+            pos_scalp = await engine.execute_buy(
                 token,
                 amount_usd=buy_amount_usd,
                 strategy_type="SCALP",
             )
             if pos_scalp:
                 self.telemetry.record_trade_opened()
-                await self.position_tracker.register_position(pos_scalp)
+                await tracker.register_position(pos_scalp)
+                self.priority_pool.register_executed_token(token, pos_scalp.entry_price, "SCALP")
         elif open_swing:
             logger.info(
-                "🏛️ [ESTRATÉGIA SWING] Token %s consolidado para Swing (2h-4h). Abrindo perna de Swing.",
+                "🏛️ [ESTRATÉGIA SWING (%s)] Token %s consolidado para Swing (2h-4h). Abrindo perna de Swing.",
+                target_mode,
                 token.symbol or token.address[:8],
             )
-            pos_swing = await self.execution_engine.execute_buy(
+            pos_swing = await engine.execute_buy(
                 token,
                 amount_usd=buy_amount_usd,
                 strategy_type="SWING",
             )
             if pos_swing:
                 self.telemetry.record_trade_opened()
-                await self.position_tracker.register_position(pos_swing)
+                await tracker.register_position(pos_swing)
+                self.priority_pool.register_executed_token(token, pos_swing.entry_price, "SWING")
 
-    async def _execute_dual_track_entry(self, token: TokenMetadata, buy_amount_usd: Decimal) -> None:
+    async def _execute_dual_track_entry(
+        self,
+        token: TokenMetadata,
+        buy_amount_usd: Decimal,
+        engine: ExecutionEngine | None = None,
+        tracker: PositionTracker | None = None,
+    ) -> None:
         """Abre posições simultâneas SCALP e SWING no modo Dual-Track com valor integral em cada perna."""
+        exec_eng = engine or self.execution_engine
+        pos_trk = tracker or self.position_tracker
+        mode_label = exec_eng.mode.value if hasattr(exec_eng, "mode") else "EXEC"
         logger.info(
-            "⚡ [DUAL-TRACK ENTRY] Abrindo Posição SCALP ($%.2f) e Posição SWING ($%.2f) para %s",
+            "⚡ [DUAL-TRACK ENTRY (%s)] Abrindo Posição SCALP ($%.2f) e Posição SWING ($%.2f) para %s",
+            mode_label,
             buy_amount_usd,
             buy_amount_usd,
             token.symbol or token.address[:8],
         )
-        pos_scalp = await self.execution_engine.execute_buy(
+        pos_scalp = await exec_eng.execute_buy(
             token,
             amount_usd=buy_amount_usd,
             strategy_type="SCALP",
         )
         if pos_scalp:
             self.telemetry.record_trade_opened()
-            await self.position_tracker.register_position(pos_scalp)
+            await pos_trk.register_position(pos_scalp)
+            self.priority_pool.register_executed_token(token, pos_scalp.entry_price, "SCALP")
 
-        pos_swing = await self.execution_engine.execute_buy(
+        pos_swing = await exec_eng.execute_buy(
             token,
             amount_usd=buy_amount_usd,
             strategy_type="SWING",
         )
         if pos_swing:
             self.telemetry.record_trade_opened()
-            await self.position_tracker.register_position(pos_swing)
+            await pos_trk.register_position(pos_swing)
+            self.priority_pool.register_executed_token(token, pos_swing.entry_price, "SWING")
 
 
     async def _handle_position_closed(self, position: PositionState) -> None:
-        """Notificado quando uma posição é 100% liquidada (Trailing Stop ou Stop Loss)."""
+        """Notificado quando uma posição é 100% liquidada (Trailing Stop, Take Profit ou Stop Loss)."""
         logger.info(
-            "🔄 [POSIÇÃO 100%% ENCERRADA] Registrando saída do token %s para monitoramento de reentrada segura.",
+            "🔄 [POSIÇÃO 100%% ENCERRADA] Registrando saída do token %s para reanálise e reentrada imediata.",
             position.token_address,
         )
-        # 1. Registra no PerformanceScalingManager para reentrada imediata (vencedor) ou quarentena (perda)
+        # 1. Registra no PerformanceScalingManager
         exit_price = position.trailing_stop_price if position.trailing_stop_price > Decimal("0.0") else position.entry_price
         exit_reason = "TRAILING_STOP" if position.status.value == "CLOSED" else "EMERGENCY_STOP"
         is_winner = (position.realized_pnl_usd > Decimal("0.0")) or position.break_even_triggered
@@ -1622,32 +2110,163 @@ class VertexBotOrchestrator:
             is_winner=is_winner,
         )
 
-        # 2. Libera token nos caches de vistos dos scanners se tiver sido trade lucrativo
-        if is_winner:
-            if hasattr(self.scanner, "release_token"):
-                try:
-                    self.scanner.release_token(position.token_address)
-                    logger.info("🚀 [REENTRADA IMEDIATA] Token %s liberado no scanner para recompras sem restrições.", position.token_address)
-                except Exception as exc:
-                    logger.debug("Erro ao chamar release_token no scanner: %s", exc)
-        else:
-            logger.info(
-                "🛑 [ANTI-LOOP RECOMPRA] Token %s finalizou sem lucro ($%.4f). Mantido no cache de vistos para impedir recompras cíclicas.",
-                position.token_address,
-                float(position.realized_pnl_usd),
-            )
+        # 1.1 Atualiza estatísticas na Lista de Prioridades
+        self.priority_pool.record_trade_result(
+            token_address=position.token_address,
+            realized_pnl_usd=position.realized_pnl_usd,
+            exit_price=exit_price,
+            exit_reason=exit_reason,
+        )
 
-        # 3. Dispara verificação imediata da fila de espera para preencher o slot recém-liberado
+        # 2. Libera token nos caches de vistos dos scanners para garantir detecção contínua
+        if hasattr(self.scanner, "release_token"):
+            try:
+                self.scanner.release_token(position.token_address)
+                logger.info("🔓 [SCANNER LIBERADO] Token %s liberado no scanner para recompras contínuas.", position.token_address)
+            except Exception as exc:
+                logger.debug("Erro ao chamar release_token no scanner: %s", exc)
+
+        # 3. Autoriza reavaliação imediata no gestor de reentrada
+        self.reentry_manager.authorize_immediate_reanalysis(position.token_address)
+
+        # 4. Dispara imediatamente a reanálise do token fechado e a verificação de slots
         try:
             loop = asyncio.get_running_loop()
             if loop.is_running():
-                asyncio.create_task(self._try_fill_slots_from_waiting_queue())
+                # Reanálise imediata do próprio token recém-fechado para reabrir posição se estiver conforme
+                target_mode_str = position.mode.value if hasattr(position.mode, "value") else str(position.mode)
+                reanalysis_delay = 0.0 if self._is_test_env() else 0.5
+                reanalyze_task = asyncio.create_task(
+                    self._reanalyze_and_reenter_token(position.token_address, mode=target_mode_str, delay_seconds=reanalysis_delay)
+                )
+                self._tasks.append(reanalyze_task)
+                # Preenchimento de slots com tokens da fila de espera
+                fill_task = asyncio.create_task(self._try_fill_slots_from_waiting_queue())
+                self._tasks.append(fill_task)
         except RuntimeError:
             pass
 
-    async def _schedule_token_reentry_check(self, token_address: str, delay_seconds: float = 15.0) -> None:
-        """Compatibilidade: reentradas são gerenciadas com segurança pelo ReentryRiskManager na watchlist."""
-        pass
+    async def _reanalyze_and_reenter_token(
+        self,
+        token_address: str,
+        mode: str = "PAPER",
+        delay_seconds: float = 0.5,
+    ) -> None:
+        """
+        Reavalia imediatamente um token cuja posição acabou de ser encerrada.
+        Se os critérios de segurança, liquidez, dinâmica de mercado e auditoria gráfica
+        estiverem válidos ('de acordo'), abre uma nova posição imediatamente no modo correspondente.
+        """
+        if delay_seconds > 0.0:
+            try:
+                await asyncio.sleep(delay_seconds)
+            except asyncio.CancelledError:
+                return
+
+        if not self.is_running:
+            return
+
+        target_mode = mode.upper()
+        if target_mode == "PAPER":
+            if not self.paper_enabled or self.paper_paused:
+                logger.debug("⏸️ [REAVALIAÇÃO POST-FECHAMENTO] Modo PAPER inativo ou pausado para %s.", token_address)
+                return
+        elif target_mode == "LIVE":
+            if not self.live_enabled or self.live_paused:
+                logger.debug("⏸️ [REAVALIAÇÃO POST-FECHAMENTO] Modo LIVE inativo ou pausado para %s.", token_address)
+                return
+            if not self.live_engine.has_connected_wallet():
+                logger.warning("⚠️ [REAVALIAÇÃO POST-FECHAMENTO] Nenhuma carteira real conectada para LIVE no token %s.", token_address)
+                return
+
+        logger.info(
+            "🔍 [REAVALIAÇÃO IMEDIATA PÓS-FECHAMENTO (%s)] Analisando novamente o token %s...",
+            target_mode,
+            token_address,
+        )
+
+        # 1. Recupera metadados do token no banco de dados ou reconstrói registro padrão
+        token_meta = await self.tokens_repo.get_token_metadata_by_address(token_address)
+        if token_meta is None:
+            token_meta = TokenMetadata(
+                address=token_address,
+                chain="solana",
+                dex="raydium",
+                initial_liquidity_usd=Decimal("5000.0"),
+            )
+
+        # 2. Busca cotação e dados frescos de liquidez/volume na DEX
+        live_prices = await self.price_feed.fetch_prices([token_meta.address])
+        fresh_price = live_prices.get(token_meta.address) or live_prices.get(token_meta.address.lower())
+        cached_pair = getattr(self.price_feed, "get_pair_data", lambda _: None)(token_meta.address)
+
+        raw_event = dict(token_meta.raw_event or {})
+        if fresh_price is not None:
+            raw_event["priceUsd"] = str(fresh_price)
+        liq_val = token_meta.initial_liquidity_usd
+        if cached_pair:
+            raw_event["pair_data"] = cached_pair
+            if "pairCreatedAt" in cached_pair:
+                raw_event["pairCreatedAt"] = cached_pair["pairCreatedAt"]
+            pair_liq = Decimal(str(cached_pair.get("liquidity", {}).get("usd") or 0.0))
+            if pair_liq > Decimal("0.0"):
+                liq_val = pair_liq
+
+        token_meta = token_meta.model_copy(update={"raw_event": raw_event, "initial_liquidity_usd": liq_val})
+
+        # 3. Auditoria de Segurança Completa (Hard Gates: Mint, Freeze, LP >= 98%, Tax <= 3%, Top 10 <= 15%)
+        mock_overrides = (
+            {
+                "is_mint_revoked": True,
+                "is_freeze_revoked": True,
+                "lp_burn_pct": 100.0,
+                "top10_pct": 10.0,
+                "taxes": (0.0, 0.0, False),
+            }
+            if self.run_mock_stream
+            else None
+        )
+        audit = await self.validator.audit_token(token_meta, mock_overrides=mock_overrides)
+        if not audit.is_approved:
+            logger.warning(
+                "🛑 [REAVALIAÇÃO REPROVADA (%s)] Token %s (%s) desqualificado na auditoria de segurança pós-fechamento: %s",
+                target_mode,
+                token_meta.symbol or token_meta.address[:8],
+                token_meta.address,
+                audit.rejection_reason or "Reprovado nos critérios de segurança",
+            )
+            return
+
+        # 4. Auditoria Gráfica e Estrutura de Velas (Anti-Dump / Velas Mínimas)
+        if hasattr(self, "chart_auditor") and self.chart_auditor is not None:
+            is_chart_safe, chart_reason, _ = await self.chart_auditor.audit_token_pre_entry(token_meta)
+            if not is_chart_safe:
+                logger.warning(
+                    "🛑 [REAVALIAÇÃO GRÁFICA REPROVADA (%s)] Token %s (%s) desqualificado na auditoria gráfica: %s",
+                    target_mode,
+                    token_meta.symbol or token_meta.address[:8],
+                    token_meta.address,
+                    chart_reason,
+                )
+                return
+
+        # 5. Se estiver 100% de acordo, abre posição novamente imediatamente
+        logger.info(
+            "🚀 [REAVALIAÇÃO APROVADA (%s)] Token %s (%s) aprovado em todos os critérios após fechamento. Abrindo nova posição imediatamente!",
+            target_mode,
+            token_meta.symbol or token_meta.address[:8],
+            token_meta.address,
+        )
+        await self._evaluate_and_execute_entry(token_meta, mode=target_mode)
+
+    async def _schedule_token_reentry_check(
+        self,
+        token_address: str,
+        delay_seconds: float = 1.0,
+        mode: str = "PAPER",
+    ) -> None:
+        """Agenda/executa reanálise e reentrada imediata para um token."""
+        await self._reanalyze_and_reenter_token(token_address, mode=mode, delay_seconds=delay_seconds)
 
     async def _approved_watchlist_worker(self) -> None:
         """
@@ -1855,13 +2474,20 @@ class VertexBotOrchestrator:
                 self.telemetry.record_trade_closed(pos.realized_pnl_usd, reason="TRAILING_STOP")
 
     async def _process_active_position_tick(
-        self, pos_id: int, pos: PositionState, prices: dict[str, Decimal]
+        self,
+        pos_id: int,
+        pos: PositionState,
+        prices: dict[str, Decimal],
+        tracker: PositionTracker | None = None,
+        engine: ExecutionEngine | None = None,
     ) -> None:
         """Processa tick de preço e enriquecimento de metadados para uma posição ativa."""
+        pos_trk = tracker or self.position_tracker
+        exec_eng = engine or self.execution_engine
         current_price = prices.get(pos.token_address) or prices.get(pos.token_address.lower())
         if current_price is not None and current_price > Decimal("0"):
             self.reentry_manager.update_post_exit_price(pos.token_address, current_price)
-            await self.position_tracker.process_price_tick(pos_id, current_price)
+            await pos_trk.process_price_tick(pos_id, current_price)
 
             # Notifica clientes do dashboard se houver WebSocket conectado
             if hasattr(self, "dashboard_server") and self.dashboard_server:
@@ -1881,6 +2507,7 @@ class VertexBotOrchestrator:
                                     "unrealized_pnl_pct": round(float(pos.roi_pct), 2),
                                     "ratchet_floor_price": float(pos.ratchet_floor_price),
                                     "active_tier": pos.ratchet_tier,
+                                    "mode": getattr(pos, "mode", "PAPER"),
                                 },
                             )
                         )
@@ -1892,6 +2519,7 @@ class VertexBotOrchestrator:
             if pos.break_even_triggered or pos.roi_pct >= Decimal("5.0"):
                 try:
                     asyncio.create_task(self._evaluate_scalp_swing_promotion(pos))
+                    asyncio.create_task(self._evaluate_scalp_swing_promotion(pos, tracker=pos_trk, engine=exec_eng))
                 except Exception:
                     pass
 
@@ -1903,7 +2531,12 @@ class VertexBotOrchestrator:
                 if sym or nm:
                     await self.tokens_repo.update_token_metadata(pos.token_address, sym, nm)
 
-    async def _evaluate_scalp_swing_promotion(self, pos: PositionState) -> None:
+    async def _evaluate_scalp_swing_promotion(
+        self,
+        pos: PositionState,
+        tracker: PositionTracker | None = None,
+        engine: ExecutionEngine | None = None,
+    ) -> None:
         """
         Avalia se uma posição SCALP lucrativa deve abrir automaticamente uma perna de SWING
         para potencializar o retorno em ativos com forte tendência de alta.
@@ -1912,12 +2545,15 @@ class VertexBotOrchestrator:
         if strat_mode not in ("DUAL", "SWING_ONLY"):
             return
 
+        pos_trk = tracker or self.position_tracker
+        exec_eng = engine or self.execution_engine
+
         # Precisa estar lucrativo no SCALP (ROI >= +5% ou Break-Even ativo)
         if not pos.break_even_triggered and pos.roi_pct < Decimal("5.0"):
             return
 
         # Verifica se o token já possui posição de SWING ativa
-        all_active = list(self.position_tracker.active_positions.values())
+        all_active = list(pos_trk.active_positions.values())
         has_swing = any(
             p.token_address == pos.token_address and getattr(p, "strategy_type", "SCALP") == "SWING"
             for p in all_active
@@ -1926,7 +2562,8 @@ class VertexBotOrchestrator:
             return
 
         # Verifica capacidade de slots de SWING
-        max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 10))
+        target_mode = getattr(pos, "mode", "PAPER")
+        max_positions = int(getattr(self.settings, "LIVE_MAX_CONCURRENT_POSITIONS" if target_mode == "LIVE" else "MAX_CONCURRENT_POSITIONS", 10))
         active_count = len(all_active)
         if active_count >= max_positions:
             return
@@ -1937,10 +2574,10 @@ class VertexBotOrchestrator:
             return
 
         # Dimensionamento de capital e saldo disponível
-        configured_buy = Decimal(str(getattr(self.settings, "PAPER_BUY_AMOUNT_USD", "1.0")))
+        configured_buy = Decimal(str(getattr(self.settings, "LIVE_BUY_AMOUNT_USD" if target_mode == "LIVE" else "PAPER_BUY_AMOUNT_USD", "1.0")))
         min_trade = Decimal(str(getattr(self.settings, "MIN_TRADE_AMOUNT_USD", "1.0")))
         buy_amount = configured_buy if configured_buy > Decimal("0.0") else min_trade
-        if self.execution_engine.balance_usd < buy_amount:
+        if exec_eng.balance_usd < buy_amount:
             return
 
         # Extrai métricas atualizadas do par para verificar liquidez e maturidade de Swing
@@ -1985,21 +2622,23 @@ class VertexBotOrchestrator:
             )
 
         logger.info(
-            "🚀 [PROMOÇÃO SCALP -> SWING] Token %s lucrativo (+%.2f%%). Abrindo posição complementar de SWING!",
+            "🚀 [PROMOÇÃO SCALP -> SWING (%s)] Token %s lucrativo (+%.2f%%). Abrindo posição complementar de SWING!",
+            target_mode,
             token_meta.symbol or pos.token_address[:8],
             float(pos.roi_pct),
         )
         try:
-            pos_swing = await self.execution_engine.execute_buy(
+            pos_swing = await exec_eng.execute_buy(
                 token_meta,
                 amount_usd=buy_amount,
                 strategy_type="SWING",
             )
             if pos_swing:
                 self.telemetry.record_trade_opened()
-                await self.position_tracker.register_position(pos_swing)
+                await pos_trk.register_position(pos_swing)
                 logger.info(
-                    "✅ [POSIÇÃO SWING ABERTA] Posição complementar criada para %s ($%.2f USD alocados).",
+                    "✅ [POSIÇÃO SWING ABERTA (%s)] Posição complementar criada para %s ($%.2f USD alocados).",
+                    target_mode,
                     token_meta.symbol or pos.token_address[:8],
                     float(pos_swing.allocated_capital_usd),
                 )
@@ -2013,24 +2652,42 @@ class VertexBotOrchestrator:
 
         while self.is_running:
             try:
-                active_pos = list(self.position_tracker.active_positions.items())
-                if active_pos:
-                    addresses = list({pos.token_address for _, pos in active_pos})
-                    prices = await self.price_feed.fetch_prices(addresses)
-
-                    for pos_id, pos in active_pos:
+                # 1. Posições de Simulação (PAPER)
+                active_paper = list(self.paper_tracker.active_positions.items())
+                if active_paper:
+                    addresses_paper = list({pos.token_address for _, pos in active_paper})
+                    prices_paper = await self.price_feed.fetch_prices(addresses_paper)
+                    for pos_id, pos in active_paper:
                         if not self.is_running:
                             break
-                        await self._process_active_position_tick(pos_id, pos, prices)
+                        await self._process_active_position_tick(pos_id, pos, prices_paper, tracker=self.paper_tracker, engine=self.paper_engine)
 
-                # Watchdog autônomo de posições: Encerra timeouts (1h Scalp, 24h Swing) e liquidez drenada
-                if self.position_tracker.active_positions:
+                # 2. Posições de Operações Reais (LIVE)
+                active_live = list(self.live_tracker.active_positions.items())
+                if active_live:
+                    addresses_live = list({pos.token_address for _, pos in active_live})
+                    prices_live = await self.price_feed.fetch_prices(addresses_live)
+                    for pos_id, pos in active_live:
+                        if not self.is_running:
+                            break
+                        await self._process_active_position_tick(pos_id, pos, prices_live, tracker=self.live_tracker, engine=self.live_engine)
+
+                # Watchdog autônomo de posições (ambos os modos)
+                if self.paper_tracker.active_positions:
                     try:
-                        await self.position_tracker.check_positions_watchdog(
+                        await self.paper_tracker.check_positions_watchdog(
                             get_fresh_pair_data=getattr(self.price_feed, "get_pair_data", None)
                         )
                     except Exception as wd_err:
-                        logger.debug("Erro no Watchdog de posições: %s", wd_err)
+                        logger.debug("Erro no Watchdog de posições Paper: %s", wd_err)
+
+                if self.live_tracker.active_positions:
+                    try:
+                        await self.live_tracker.check_positions_watchdog(
+                            get_fresh_pair_data=getattr(self.price_feed, "get_pair_data", None)
+                        )
+                    except Exception as wd_err:
+                        logger.debug("Erro no Watchdog de posições Live: %s", wd_err)
 
             except asyncio.CancelledError:
                 break
@@ -2059,14 +2716,17 @@ class VertexBotOrchestrator:
         # Para o scanner
         await self.scanner.stop()
 
-        # Cancela tarefas em execução
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
+        # Cancela tarefas em execução (excluindo a tarefa atual para evitar recursão ou deadlock)
+        current_task = asyncio.current_task()
+        tasks_to_cancel = [t for t in self._tasks if t is not current_task and not t.done()]
+        for task in tasks_to_cancel:
+            task.cancel()
 
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        tasks_to_wait = [t for t in self._tasks if t is not current_task]
+        if tasks_to_wait:
+            await asyncio.gather(*tasks_to_wait, return_exceptions=True)
 
-        if self.settings.EXECUTION_MODE == "PAPER":
+        if self.execution_mode == "PAPER":
             logger.info("Encerrando modo PAPER: limpando dados de posições e ordens do teste simulado...")
             await self.positions_repo.clear_paper_trading_data()
 
@@ -2074,6 +2734,13 @@ class VertexBotOrchestrator:
         await asyncio.to_thread(self._write_heartbeat_sync, False)
 
         # Fecha conexões de rede e banco de dados
+        await self.chart_auditor.close()
+        if hasattr(self.execution_engine, "close") and callable(getattr(self.execution_engine, "close")):
+            await self.execution_engine.close()
+        if hasattr(self.paper_engine, "close") and callable(getattr(self.paper_engine, "close")):
+            await self.paper_engine.close()
+        if hasattr(self.live_engine, "close") and callable(getattr(self.live_engine, "close")):
+            await self.live_engine.close()
         await self.price_feed.close()
         await self.rpc_client.close()
         await self.db.close()
@@ -2113,6 +2780,12 @@ async def _start_background_dashboard(
 def _parse_cli_and_settings() -> tuple[argparse.Namespace, Any]:
     """Processa argumentos de linha de comando e aplica overrides de configuração."""
     parser = argparse.ArgumentParser(description="Vertex-bot Trading & Scanning Engine")
+    parser.add_argument(
+        "--mode",
+        choices=["paper", "live", "dual"],
+        default=None,
+        help="Modo de execução: paper (simulação isolada), live (operações reais) ou dual (ambos)",
+    )
     parser.add_argument(
         "--simulate-mock-stream",
         action="store_true",
@@ -2169,7 +2842,67 @@ async def main() -> None:
         )
         return
 
-    orchestrator = VertexBotOrchestrator(settings)
+    mode_arg = (args.mode or settings.EXECUTION_MODE).lower()
+
+    if mode_arg == "dual":
+        logger.info("🚀 [MODO DUAL INICIADO] Executando instâncias independentes de SIMULAÇÃO (PAPER) e OPERAÇÕES REAIS (LIVE)...")
+        paper_orch = VertexBotOrchestrator(settings, execution_mode="PAPER")
+        live_orch = VertexBotOrchestrator(settings, execution_mode="LIVE")
+
+        loop = asyncio.get_running_loop()
+        stop_event = asyncio.Event()
+        paper_orch.stop_event = stop_event
+        live_orch.stop_event = stop_event
+
+        def handle_exit_dual() -> None:
+            logger.info("Sinal de encerramento recebido. Desligando instâncias Dual...")
+            stop_event.set()
+            asyncio.create_task(paper_orch.stop())
+            asyncio.create_task(live_orch.stop())
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, handle_exit_dual)
+            except NotImplementedError:
+                pass
+
+        await paper_orch.initialize()
+        await live_orch.initialize()
+
+        dashboard_runner: Any = None
+        if args.dashboard:
+            dashboard_runner, _ = await _start_background_dashboard(
+                paper_orch.db,
+                args.dashboard_port,
+                orchestrator=paper_orch,
+            )
+
+        try:
+            await asyncio.gather(
+                paper_orch.start(run_mock_stream=args.simulate_mock_stream),
+                live_orch.start(run_mock_stream=False),
+            )
+            if args.simulate_mock_stream:
+                await asyncio.sleep(8.0)
+                await paper_orch.stop()
+                await live_orch.stop()
+            else:
+                try:
+                    await stop_event.wait()
+                except asyncio.CancelledError:
+                    pass
+        finally:
+            if dashboard_runner:
+                await dashboard_runner.cleanup()
+        return
+
+    execution_mode: Literal["PAPER", "LIVE"] = "LIVE" if mode_arg == "live" else "PAPER"
+    start_enabled = True if args.simulate_mock_stream else False
+    if start_enabled:
+        logger.info("🚀 Iniciando Vertex-bot em modo %s (mock stream)...", execution_mode)
+    else:
+        logger.info("🚀 Iniciando Vertex-bot em modo STANDBY (aguardando ativação via interface)...")
+    orchestrator = VertexBotOrchestrator(settings, execution_mode=execution_mode, start_enabled=start_enabled)
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
@@ -2188,7 +2921,7 @@ async def main() -> None:
 
     await orchestrator.initialize()
 
-    dashboard_runner: Any = None
+    dashboard_runner = None
     if args.dashboard:
         dashboard_runner, _ = await _start_background_dashboard(
             orchestrator.db,

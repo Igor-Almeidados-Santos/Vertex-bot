@@ -1,0 +1,280 @@
+[
+  {
+    "address": "TokenReopen111111111111111111111111111111111",
+    "symbol": "REOPEN",
+    "name": "N/A",
+    "chain": "solana",
+    "dex": "raydium",
+    "tier": "EMERGING",
+    "initial_liquidity_usd": 15000.0,
+    "current_liquidity_usd": 15000.0,
+    "last_price": 1.25,
+    "highest_price_seen": 1.25,
+    "total_trades_count": 4,
+    "successful_trades_count": 0,
+    "total_realized_pnl_usd": 0.0,
+    "is_active_priority": true,
+    "is_alive": true,
+    "origin_mode": "PAPER",
+    "added_at": "2026-09-21T19:31:57.734737+00:00",
+    "last_traded_at": "2026-09-21T19:51:34.871435+00:00",
+    "last_evaluated_at": "2026-09-21T19:31:57.734737+00:00",
+    "raw_event": {
+      "priceUsd": "1.25"
+    }
+  },
+  {
+    "address": "DualTrackBuyToken11111111111111111111111",
+    "symbol": "DUAL",
+    "name": "N/A",
+    "chain": "solana",
+    "dex": "raydium",
+    "tier": "EMERGING",
+    "initial_liquidity_usd": 25000.0,
+    "current_liquidity_usd": 25000.0,
+    "last_price": 1.0,
+    "highest_price_seen": 1.0,
+    "total_trades_count": 8,
+    "successful_trades_count": 0,
+    "total_realized_pnl_usd": 0.0,
+    "is_active_priority": true,
+    "is_alive": true,
+    "origin_mode": "PAPER",
+    "added_at": "2026-09-21T19:32:03.313480+00:00",
+    "last_traded_at": "2026-09-21T19:51:40.171777+00:00",
+    "last_evaluated_at": "2026-09-21T19:32:03.313480+00:00",
+    "raw_event": {
+      "age_hours": 3.0,
+      "pair_data": {
+        "volume": {
+          "h1": 30000.0
+        },
+        "priceChange": {
+          "m5": 2.0
+        },
+        "txns": {
+          "m5": {
+            "buys": 50,
+            "sells": 10
+          }
+        },
+        "liquidity": {
+          "usd": 25000.0
+        }
+      }
+    }
+  },
+  {
+    "address": "PonkToken11111111111111111111111111111111111",
+    "symbol": "PONK",
+    "name": "N/A",
+    "chain": "solana",
+    "dex": "raydium",
+    "tier": "EMERGING",
+    "initial_liquidity_usd": 34000.0,
+    "current_liquidity_usd": 34000.0,
+    "last_price": 1.0,
+    "highest_price_seen": 1.0,
+    "total_trades_count": 4,
+    "successful_trades_count": 0,
+    "total_realized_pnl_usd": 0.0,
+    "is_active_priority": true,
+    "is_alive": true,
+    "origin_mode": "PAPER",
+    "added_at": "2026-09-21T19:32:03.349631+00:00",
+    "last_traded_at": "2026-09-21T19:51:40.210777+00:00",
+    "last_evaluated_at": "2026-09-21T19:32:03.349631+00:00",
+    "raw_event": {
+      "age_hours": 2.2,
+      "pair_data": {
+        "volume": {
+          "h1": 50000.0
+        },
+        "priceChange": {
+          "m5": 1.0
+        },
+        "txns": {
+          "m5": {
+            "buys": 30,
+            "sells": 5
+          }
+        },
+        "liquidity": {
+          "usd": 34000.0
+        }
+      }
+    }
+  },
+  {
+    "address": "OldToken111111111111111111111111111111111111",
+    "symbol": "OLD",
+    "name": "N/A",
+    "chain": "solana",
+    "dex": "raydium",
+    "tier": "EMERGING",
+    "initial_liquidity_usd": 50000.0,
+    "current_liquidity_usd": 50000.0,
+    "last_price": 1.0,
+    "highest_price_seen": 1.0,
+    "total_trades_count": 4,
+    "successful_trades_count": 0,
+    "total_realized_pnl_usd": 0.0,
+    "is_active_priority": true,
+    "is_alive": true,
+    "origin_mode": "PAPER",
+    "added_at": "2026-09-21T19:32:03.384905+00:00",
+    "last_traded_at": "2026-09-21T19:51:40.252026+00:00",
+    "last_evaluated_at": "2026-09-21T19:32:03.384905+00:00",
+    "raw_event": {
+      "age_hours": 15.0,
+      "pair_data": {
+        "volume": {
+          "h1": 60000.0
+        },
+        "priceChange": {
+          "m5": 0.5
+        },
+        "txns": {
+          "m5": {
+            "buys": 40,
+            "sells": 10
+          }
+        },
+        "liquidity": {
+          "usd": 50000.0
+        }
+      }
+    }
+  },
+  {
+    "address": "SwingIdealToken1111111111111111111111111111",
+    "symbol": "SWNG",
+    "name": "N/A",
+    "chain": "solana",
+    "dex": "raydium",
+    "tier": "EMERGING",
+    "initial_liquidity_usd": 25000.0,
+    "current_liquidity_usd": 25000.0,
+    "last_price": 1.0,
+    "highest_price_seen": 1.0,
+    "total_trades_count": 4,
+    "successful_trades_count": 0,
+    "total_realized_pnl_usd": 0.0,
+    "is_active_priority": true,
+    "is_alive": true,
+    "origin_mode": "PAPER",
+    "added_at": "2026-09-21T19:32:03.421867+00:00",
+    "last_traded_at": "2026-09-21T19:51:40.294915+00:00",
+    "last_evaluated_at": "2026-09-21T19:32:03.421867+00:00",
+    "raw_event": {
+      "age_hours": 3.0,
+      "pair_data": {
+        "volume": {
+          "h1": 30000.0
+        },
+        "priceChange": {
+          "m5": 1.5
+        },
+        "txns": {
+          "m5": {
+            "buys": 50,
+            "sells": 10
+          }
+        },
+        "liquidity": {
+          "usd": 25000.0
+        }
+      }
+    }
+  },
+  {
+    "address": "TokenBuyAmountTest1111111111111111111111111111",
+    "symbol": "TEST1",
+    "name": "Test 1",
+    "chain": "solana",
+    "dex": "raydium",
+    "tier": "EMERGING",
+    "initial_liquidity_usd": 10000.0,
+    "current_liquidity_usd": 10000.0,
+    "last_price": 1.0000175,
+    "highest_price_seen": 1.0000175,
+    "total_trades_count": 5,
+    "successful_trades_count": 0,
+    "total_realized_pnl_usd": 0.0,
+    "is_active_priority": true,
+    "is_alive": true,
+    "origin_mode": "PAPER",
+    "added_at": "2026-09-21T19:32:03.744102+00:00",
+    "last_traded_at": "2026-09-21T19:51:40.622884+00:00",
+    "last_evaluated_at": "2026-09-21T19:32:03.744102+00:00",
+    "raw_event": {}
+  },
+  {
+    "address": "TokenSlotFull1111111111111111111111111111111",
+    "symbol": "SLOT1",
+    "name": "Slot Token 1",
+    "chain": "solana",
+    "dex": "raydium",
+    "tier": "EMERGING",
+    "initial_liquidity_usd": 10000.0,
+    "current_liquidity_usd": 10000.0,
+    "last_price": 1.000025,
+    "highest_price_seen": 1.000025,
+    "total_trades_count": 5,
+    "successful_trades_count": 0,
+    "total_realized_pnl_usd": 0.0,
+    "is_active_priority": true,
+    "is_alive": true,
+    "origin_mode": "PAPER",
+    "added_at": "2026-09-21T19:32:04.069297+00:00",
+    "last_traded_at": "2026-09-21T19:51:40.925512+00:00",
+    "last_evaluated_at": "2026-09-21T19:32:04.069297+00:00",
+    "raw_event": {}
+  },
+  {
+    "address": "TokenDrainTest11111111111111111111111111111111",
+    "symbol": "DRN1",
+    "name": "Drain 1",
+    "chain": "solana",
+    "dex": "raydium",
+    "tier": "EMERGING",
+    "initial_liquidity_usd": 10000.0,
+    "current_liquidity_usd": 10000.0,
+    "last_price": 0.880022,
+    "highest_price_seen": 1.000025,
+    "total_trades_count": 6,
+    "successful_trades_count": 0,
+    "total_realized_pnl_usd": 0.0,
+    "is_active_priority": true,
+    "is_alive": true,
+    "origin_mode": "PAPER",
+    "added_at": "2026-09-21T19:32:04.378442+00:00",
+    "last_traded_at": "2026-09-21T19:51:41.261194+00:00",
+    "last_evaluated_at": "2026-09-21T19:32:04.384085+00:00",
+    "raw_event": {}
+  },
+  {
+    "address": "TokenDrainTest22222222222222222222222222222222",
+    "symbol": "DRN2",
+    "name": "Drain 2",
+    "chain": "solana",
+    "dex": "raydium",
+    "tier": "EMERGING",
+    "initial_liquidity_usd": 10000.0,
+    "current_liquidity_usd": 10000.0,
+    "last_price": 1.5000375,
+    "highest_price_seen": 1.5000375,
+    "total_trades_count": 4,
+    "successful_trades_count": 0,
+    "total_realized_pnl_usd": 0.0,
+    "is_active_priority": true,
+    "is_alive": true,
+    "origin_mode": "PAPER",
+    "added_at": "2026-09-21T19:33:38.265171+00:00",
+    "last_traded_at": "2026-09-21T19:51:41.518526+00:00",
+    "last_evaluated_at": "2026-09-21T19:33:38.265171+00:00",
+    "raw_event": {
+      "priceUsd": "1.5"
+    }
+  }
+]

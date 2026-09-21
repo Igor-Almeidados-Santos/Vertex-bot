@@ -1,0 +1,23 @@
+{
+  "is_running": false,
+  "is_paused": false,
+  "mode": "LIVE",
+  "has_connected_wallet": false,
+  "wallet_balance_usd": 0.0,
+  "initial_wallet_usd": 0.0,
+  "active_positions_count": 0,
+  "wallets": [
+    {
+      "chain": "solana",
+      "address": "",
+      "is_connected": false
+    },
+    {
+      "chain": "evm",
+      "address": "",
+      "is_connected": false
+    }
+  ],
+  "pid": 218884,
+  "timestamp": 1790021549.447955
+}

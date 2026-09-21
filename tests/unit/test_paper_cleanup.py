@@ -181,3 +181,51 @@ async def test_paper_engine_real_price_acquisition(tmp_path: Any) -> None:
     assert pos2.entry_price < Decimal("0.86")
 
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_paper_wallet_zero_default_and_reset(tmp_path: Any) -> None:
+    """Valida que a simulação inicia com carteira zerada ($0.00) e retorna a zero ao encerrar/reiniciar."""
+    from main import VertexBotOrchestrator
+    from src.config.settings import Settings
+
+    settings = Settings(
+        SQLITE_DB_PATH=str(tmp_path / "test_zero_wallet.db"),
+        EXECUTION_MODE="PAPER",
+    )
+    # Default das configurações deve ser zero
+    assert settings.PAPER_INITIAL_WALLET_USD == Decimal("0.0")
+
+    db = DatabaseManager(settings.SQLITE_DB_PATH)
+    await db.initialize()
+
+    orch = VertexBotOrchestrator(settings, db=db, start_enabled=False)
+    orch._get_config_path = lambda: tmp_path / "bot_config.json"  # type: ignore[method-assign]
+    orch._get_paper_session_path = lambda: tmp_path / "paper_session.json"  # type: ignore[method-assign]
+    orch._get_status_path = lambda: tmp_path / "bot_status.json"  # type: ignore[method-assign]
+
+    await orch.initialize()
+
+    # Verifica saldo inicial zerado
+    assert orch.settings.PAPER_INITIAL_WALLET_USD == Decimal("0.0")
+    assert orch.paper_engine.balance_usd == Decimal("0.0")
+
+    # Realiza depósito de $20 simulados
+    orch.deposit_wallet(Decimal("20.0"))
+    assert orch.paper_engine.balance_usd == Decimal("20.0")
+    assert orch.settings.PAPER_INITIAL_WALLET_USD == Decimal("20.0")
+
+    # Encerra simulação: deve zerar o saldo
+    await orch.stop_paper()
+    assert orch.settings.PAPER_INITIAL_WALLET_USD == Decimal("0.0")
+    assert orch.paper_engine.balance_usd == Decimal("0.0")
+
+    # Deposita novamente e testa reiniciar sessão
+    orch.deposit_wallet(Decimal("15.0"))
+    assert orch.paper_engine.balance_usd == Decimal("15.0")
+    await orch.restart_paper_session()
+    assert orch.settings.PAPER_INITIAL_WALLET_USD == Decimal("0.0")
+    assert orch.paper_engine.balance_usd == Decimal("0.0")
+
+    await orch.stop()
+    await db.close()
