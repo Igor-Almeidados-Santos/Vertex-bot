@@ -67,28 +67,42 @@ class DexScreenerPriceFeed:
         return self._pair_data_cache.get(address) or self._pair_data_cache.get(address.lower())
 
     def _parse_pair_item(self, pair: dict[str, Any], prices: dict[str, Decimal]) -> None:
-        """Extrai cotação e metadados de um par retornado pela DexScreener."""
+        """Extrai cotação e metadados de um par retornado pela DexScreener, priorizando sempre a pool principal com maior liquidez."""
         base_token = pair.get("baseToken", {})
         raw_addr = str(base_token.get("address", "")).strip()
         raw_price = pair.get("priceUsd")
         sym = base_token.get("symbol")
         nm = base_token.get("name")
-        if raw_addr:
-            self._pair_data_cache[raw_addr] = pair
-            self._pair_data_cache[raw_addr.lower()] = pair
-        if raw_addr and (sym or nm):
-            self._metadata_cache[raw_addr] = (sym, nm)
-            self._metadata_cache[raw_addr.lower()] = (sym, nm)
+        pair_liq = float((pair.get("liquidity") or {}).get("usd") or 0.0)
 
-        if raw_addr and raw_price:
-            try:
-                dec_price = Decimal(str(raw_price))
-                if raw_addr not in prices:
-                    prices[raw_addr] = dec_price
-                if raw_addr.lower() not in prices:
-                    prices[raw_addr.lower()] = dec_price
-            except Exception as parse_err:
-                logger.debug("Preço inválido para %s: %s", raw_addr, parse_err)
+        if raw_addr:
+            existing_pair = self._pair_data_cache.get(raw_addr)
+            existing_pair_addr = str(existing_pair.get("pairAddress", "")).strip() if existing_pair else ""
+            new_pair_addr = str(pair.get("pairAddress", "")).strip()
+            existing_liq = float((existing_pair.get("liquidity") or {}).get("usd") or 0.0) if existing_pair else -1.0
+
+            # Atualiza se:
+            # 1. Não havia par em cache
+            # 2. É o MESMO par primário (atualizando cotação e liquidez recente da pool principal)
+            # 3. É um par com liquidez maior do que a pool que estava em cache
+            is_same_pool = bool(new_pair_addr and new_pair_addr == existing_pair_addr)
+            if existing_pair is None or is_same_pool or pair_liq >= existing_liq:
+                self._pair_data_cache[raw_addr] = pair
+                self._pair_data_cache[raw_addr.lower()] = pair
+                if sym or nm:
+                    self._metadata_cache[raw_addr] = (sym, nm)
+                    self._metadata_cache[raw_addr.lower()] = (sym, nm)
+                if raw_price:
+                    try:
+                        dec_price = Decimal(str(raw_price))
+                        prices[raw_addr] = dec_price
+                        prices[raw_addr.lower()] = dec_price
+                    except Exception as parse_err:
+                        logger.debug("Preço inválido para %s: %s", raw_addr, parse_err)
+        elif raw_addr and (sym or nm):
+            if raw_addr not in self._metadata_cache:
+                self._metadata_cache[raw_addr] = (sym, nm)
+                self._metadata_cache[raw_addr.lower()] = (sym, nm)
 
     async def fetch_prices(self, addresses: list[str]) -> dict[str, Decimal]:
         """Obtém cotações em USD para uma lista de endereços de tokens e extrai metadados."""
@@ -113,9 +127,14 @@ class DexScreenerPriceFeed:
 
                 pairs = payload.get("pairs", [])
                 if isinstance(pairs, list):
-                    for pair in pairs:
-                        if isinstance(pair, dict):
-                            self._parse_pair_item(pair, prices)
+                    # Ordena pares por liquidez decrescente para que a pool principal seja sempre priorizada
+                    valid_pairs = [p for p in pairs if isinstance(p, dict)]
+                    valid_pairs.sort(
+                        key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0.0),
+                        reverse=True,
+                    )
+                    for pair in valid_pairs:
+                        self._parse_pair_item(pair, prices)
             except Exception as exc:
                 logger.debug("Erro ao consultar cotações de lote: %s", exc)
 

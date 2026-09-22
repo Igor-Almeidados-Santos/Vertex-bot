@@ -220,3 +220,65 @@ async def test_live_price_tick_triggers_break_even_and_trailing_stop(tmp_path: A
 
     await db.close()
 
+
+@pytest.mark.asyncio
+async def test_price_feed_prioritizes_highest_liquidity_pair_and_ignores_micropools() -> None:
+    """Valida que o PriceFeed preserva a pool primária e não é sobrescrito por micropools secundárias."""
+    feed = DexScreenerPriceFeed()
+    token_addr = "TokenMultiPool1111111111111111111111111111"
+
+    # Simula resposta DexScreener com 3 pools:
+    # 1. Raydium principal: $250.000 liquidez
+    # 2. Meteora média: $50.000 liquidez
+    # 3. Micro pool residual: $10 liquidez
+    mock_payload = {
+        "pairs": [
+            {
+                "baseToken": {"address": token_addr, "symbol": "MULTI", "name": "Multi Pool Token"},
+                "dexId": "raydium",
+                "pairAddress": "RaydiumMainPair1111111111111111111111111111",
+                "priceUsd": "0.005000",
+                "liquidity": {"usd": 250000.0},
+            },
+            {
+                "baseToken": {"address": token_addr, "symbol": "MULTI", "name": "Multi Pool Token"},
+                "dexId": "meteora",
+                "pairAddress": "MeteoraSecondaryPair22222222222222222222222",
+                "priceUsd": "0.004950",
+                "liquidity": {"usd": 50000.0},
+            },
+            {
+                "baseToken": {"address": token_addr, "symbol": "MULTI", "name": "Multi Pool Token"},
+                "dexId": "meteora",
+                "pairAddress": "MeteoraDeadPool3333333333333333333333333333",
+                "priceUsd": "0.004800",
+                "liquidity": {"usd": 10.0},
+            },
+        ]
+    }
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value=mock_payload)
+
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_resp
+    mock_cm.__aexit__.return_value = None
+
+    mock_session = AsyncMock()
+    mock_session.closed = False
+    mock_session.get = MagicMock(return_value=mock_cm)
+    feed._session = mock_session
+
+    prices = await feed.fetch_prices([token_addr])
+    assert prices[token_addr] == Decimal("0.005000")
+
+    cached_pair = feed.get_pair_data(token_addr)
+    assert cached_pair is not None
+    assert cached_pair["dexId"] == "raydium"
+    assert cached_pair["pairAddress"] == "RaydiumMainPair1111111111111111111111111111"
+    assert cached_pair["liquidity"]["usd"] == 250000.0
+
+    await feed.close()
+
+
