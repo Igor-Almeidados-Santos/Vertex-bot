@@ -240,6 +240,7 @@ async def test_dual_track_entry_orchestration(tmp_path: Path) -> None:
             },
         },
     )
+    orch.priority_pool.register_executed_token(token, entry_price=Decimal("1.0"))
 
     pos_scalp = PositionState(
         id=1,
@@ -402,11 +403,19 @@ async def test_dual_mode_swing_entry_when_scalp_slots_full(tmp_path: Path) -> No
     orch.execution_engine.balance_usd = Decimal("50.00")
     orch.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
-    # Pré-ocupa todos os 5 slots de SCALP
+    # Pré-ocupa todos os 5 slots de SCALP com tokens prioritários
     for i in range(5):
+        addr = f"ScalpFullToken{i}"
+        meta = TokenMetadata(
+            address=addr,
+            dex="raydium",
+            initial_liquidity_usd=Decimal("50000.0"),
+            symbol=f"SCLP{i}",
+        )
+        orch.priority_pool.register_executed_token(meta, entry_price=Decimal("1.0"))
         p = PositionState(
             id=i + 1,
-            token_address=f"ScalpFullToken{i}",
+            token_address=addr,
             mode=ExecutionMode.PAPER,
             strategy_type="SCALP",
             entry_price=Decimal("1.0"),

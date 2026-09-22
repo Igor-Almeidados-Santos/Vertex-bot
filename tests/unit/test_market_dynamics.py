@@ -189,3 +189,27 @@ async def test_security_validator_gate7_integration(tmp_path: Path):
 
     await db.close()
 
+
+def test_market_dynamics_mature_token_no_age_cap() -> None:
+    """Token com mais de 24h (ex: 50 dias / 1200h) deve ser aprovado sem bloqueio por teto de idade."""
+    validator = MarketDynamicsValidator(
+        min_age_hours_scalp=2.0,
+        max_age_hours_scalp=720.0,
+    )
+    mature_token = create_token_with_market_data(
+        address="MATURE_TOKEN_50D",
+        age_hours=1200.0,  # 50 dias de idade (> 24h e > 720h)
+        volume_1h=50000.0,
+        liquidity_usd=150000.0,
+        price_change_5m=1.5,
+        buys_5m=40,
+        sells_5m=10,
+    )
+
+    is_safe, reason, details = validator.evaluate(mature_token, strategy_mode="DUAL")
+    assert is_safe is True
+    assert reason is None
+    assert details["is_consolidated"] is True
+    assert details["eligible_scalp"] is True
+
+

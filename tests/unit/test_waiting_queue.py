@@ -101,8 +101,7 @@ async def test_waiting_queue_enqueues_when_slots_full(
         await orchestrator._evaluate_and_execute_entry(token2)
         assert len(orchestrator.position_tracker.active_positions) == 1
         assert len(orchestrator.waiting_tokens) == 1
-        assert token2.address in orchestrator.waiting_tokens
-        assert orchestrator.waiting_tokens[token2.address]["waiting_reason"] == "AGUARDANDO_SLOT"
+        assert "AGUARDANDO_SLOT" in orchestrator.waiting_tokens[token2.address]["waiting_reason"]
 
 
 @pytest.mark.asyncio

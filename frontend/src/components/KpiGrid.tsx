@@ -134,7 +134,16 @@ export function KpiGrid({ status, summary, positions, waitingTokens }: KpiGridPr
             </span>
             <span className="text-xs text-gray-400 font-mono">/ {maxSlots} slots</span>
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-gray-400 mt-1 font-mono">
+          {/* Divisão 50/50: Prioritários vs Novos */}
+          <div className="flex items-center justify-between text-[11px] text-gray-400 mt-1 font-mono">
+            <span className="text-amber-400" title="Slots reservados para ativos da Lista de Prioridades">
+              🏛️ Priorit: {status?.slot_quotas?.priority_slots_used ?? status?.priority_slots_used ?? summary?.slot_quotas?.priority_slots_used ?? 0}/{status?.slot_quotas?.priority_slots_max ?? status?.priority_slots_max ?? summary?.slot_quotas?.priority_slots_max ?? Math.ceil(maxSlots / 2)}
+            </span>
+            <span className="text-cyan-400" title="Slots reservados para novos ativos em análise">
+              🚀 Novos: {status?.slot_quotas?.new_tokens_slots_used ?? status?.new_tokens_slots_used ?? summary?.slot_quotas?.new_tokens_slots_used ?? 0}/{status?.slot_quotas?.new_tokens_slots_max ?? status?.new_tokens_slots_max ?? summary?.slot_quotas?.new_tokens_slots_max ?? Math.floor(maxSlots / 2)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-gray-500 mt-0.5 font-mono">
             <span className="text-scalp">Scalp: {scalpPositions}</span>
             <span>•</span>
             <span className="text-swing">Swing: {swingPositions}</span>

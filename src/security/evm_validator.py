@@ -67,11 +67,15 @@ class EVMSecurityValidator:
         chain: str,
         token_address: str,
         mock_override: bool | None = None,
+        is_consolidated: bool = False,
+        age_hours: float | None = None,
     ) -> tuple[bool, str | None, dict[str, Any]]:
         """
         Executa auditoria de segurança do token na rede EVM especificada.
         Retorna (is_approved: bool, rejection_reason: str | None, details: dict[str, Any]).
         """
+        is_mature = is_consolidated or (age_hours is not None and age_hours >= 24.0)
+
         if mock_override is not None:
             return (
                 mock_override,
@@ -226,9 +230,16 @@ class EVMSecurityValidator:
         # 6. HARD GATE: Emissão ilimitada de tokens (is_mintable)
         is_mintable = str(data.get("is_mintable", "0")) == "1"
         if is_mintable:
-            reason = "Emissão ilimitada habilitada (is_mintable=1): risco crítico de diluição/rug pull pelo criador"
-            logger.warning("🚨 [EVM MINTABLE] Token %s (%s): %s", token_address, chain, reason)
-            return False, reason, data
+            if not is_mature:
+                reason = "Emissão ilimitada habilitada (is_mintable=1): risco crítico de diluição/rug pull pelo criador"
+                logger.warning("🚨 [EVM MINTABLE] Token %s (%s): %s", token_address, chain, reason)
+                return False, reason, data
+            else:
+                logger.info(
+                    "ℹ️ [EVM MINTABLE PERMITIDO] Token maduro (>24h) %s (%s) possui emissão habilitada (perfil comum em DeFi de governança/gauges).",
+                    token_address,
+                    chain,
+                )
 
         # 7. HARD GATE: Renúncia reversível (can_take_back_ownership)
         can_reclaim = str(data.get("can_take_back_ownership", "0")) == "1"
@@ -270,12 +281,19 @@ class EVMSecurityValidator:
             data["lp_locked_or_burned_pct"] = float(locked_or_burned_pct)
             min_lp_protect = Decimal("70.0")
             if locked_or_burned_pct < min_lp_protect:
-                reason = (
-                    f"Liquidez (LP) desprotegida: apenas {locked_or_burned_pct:.1f}% bloqueada/queimada "
-                    f"(mínimo exigido: {min_lp_protect:.1f}%) - Risco de remoção de liquidez (LP pull)"
-                )
-                logger.warning("🚨 [EVM LP RISK] Token %s (%s): %s", token_address, chain, reason)
-                return False, reason, data
+                if not is_mature:
+                    reason = (
+                        f"Liquidez (LP) desprotegida: apenas {locked_or_burned_pct:.1f}% bloqueada/queimada "
+                        f"(mínimo exigido: {min_lp_protect:.1f}%) - Risco de remoção de liquidez (LP pull)"
+                    )
+                    logger.warning("🚨 [EVM LP RISK] Token %s (%s): %s", token_address, chain, reason)
+                    return False, reason, data
+                else:
+                    logger.info(
+                        "ℹ️ [EVM LP CONSOLIDADA] Token maduro (>24h) %s (%s) com liquidez em cofre oficial de DEX (LP lock externo dispensado).",
+                        token_address,
+                        chain,
+                    )
 
         logger.info(
             "✅ [EVM SECURITY APROVADO] Token %s (%s) aprovado nos Hard Gates EVM (Taxas: Compra %.1f%% / Venda %.1f%%).",

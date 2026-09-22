@@ -1,7 +1,3 @@
 {
-  "command": "stop",
-  "command_id": "3768ff19-e26c-4d8d-9ca6-634112640572",
-  "mode": "PAPER",
-  "payload": {},
-  "timestamp": 1789996624.756663
+  "action": "none"
 }

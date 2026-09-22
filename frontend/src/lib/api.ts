@@ -7,6 +7,7 @@ import {
   WaitingTokenItem,
   WalletInfo,
   PriorityToken,
+  PurgePriorityResult,
 } from "@/types/bot";
 
 const API_BASE = "";
@@ -167,6 +168,16 @@ export async function transferSol(params: {
 export async function getPriorityTokens(mode: string = "live"): Promise<PriorityToken[]> {
   return fetchJson<PriorityToken[]>(`/api/tokens/priority?mode=${encodeURIComponent(mode)}`);
 }
+
+export async function purgePriorityTokens(mode: string = "live"): Promise<PurgePriorityResult> {
+  return fetchJson<PurgeResultPayload>("/api/tokens/priority/purge", {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
+}
+
+type PurgeResultPayload = PurgePriorityResult;
+
 
 
 

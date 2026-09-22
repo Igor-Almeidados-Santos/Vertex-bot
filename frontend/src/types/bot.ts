@@ -59,6 +59,15 @@ export interface WalletInfo {
   balance_usd?: number;
 }
 
+export interface SlotQuotas {
+  max_positions: number;
+  priority_slots_max: number;
+  priority_slots_used: number;
+  new_tokens_slots_max: number;
+  new_tokens_slots_used: number;
+  total_active: number;
+}
+
 export interface BotStatusData {
   is_running: boolean;
   is_paused: boolean;
@@ -75,6 +84,11 @@ export interface BotStatusData {
   has_wallet?: boolean;
   has_connected_wallet?: boolean;
   wallets?: WalletInfo[];
+  slot_quotas?: SlotQuotas;
+  priority_slots_max?: number;
+  priority_slots_used?: number;
+  new_tokens_slots_max?: number;
+  new_tokens_slots_used?: number;
 }
 
 export interface PnLSummary {
@@ -113,6 +127,7 @@ export interface SummaryData {
   scanner: ScannerSummary;
   session_mode: string;
   waiting_tokens_count: number;
+  slot_quotas?: SlotQuotas;
 }
 
 export interface PositionItem {
@@ -237,6 +252,18 @@ export interface PriorityToken {
   last_traded_at: string;
   last_evaluated_at: string;
   raw_event?: Record<string, unknown>;
+}
+
+export interface PurgePriorityResult {
+  mode: string;
+  purged_count: number;
+  remaining_count: number;
+  purged: Array<{
+    token_address: string;
+    symbol?: string;
+    name?: string;
+    reason: string;
+  }>;
 }
 
 

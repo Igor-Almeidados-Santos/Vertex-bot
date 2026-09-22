@@ -156,26 +156,48 @@ class MarketDynamicsValidator:
         quote_address = str(quote_token.get("address") or "").strip()
 
         # 8. Elegibilidade Estrutural por Estratégia
+        raw_evt = token.raw_event if isinstance(token.raw_event, dict) else {}
+        is_consolidated = bool(
+            raw_evt.get("token_tier") == "CONSOLIDATED"
+            or raw_evt.get("is_established")
+            or raw_evt.get("is_top_ranked")
+            or raw_evt.get("is_priority")
+            or (age_hours is not None and age_hours >= 24.0)
+        )
+
         eligible_scalp = False
-        if (
-            (age_hours is None or self.min_age_hours_scalp <= age_hours <= self.max_age_hours_scalp)
-            and liquidity_usd >= self.min_liquidity_scalp_usd
-            and liquidity_usd <= self.max_liquidity_usd
-        ):
-            eligible_scalp = True
+        if is_consolidated:
+            # Para ativos consolidados e da lista de prioridades:
+            # Teto de idade estendido (até 10 anos) e sem bloqueio por liquidez profunda
+            if (age_hours is None or age_hours >= self.min_age_hours_scalp) and liquidity_usd >= self.min_liquidity_scalp_usd:
+                eligible_scalp = True
+        else:
+            # Tokens jovens/emergentes mantêm os parâmetros protetivos
+            if (
+                (age_hours is None or self.min_age_hours_scalp <= age_hours <= self.max_age_hours_scalp)
+                and liquidity_usd >= self.min_liquidity_scalp_usd
+                and liquidity_usd <= self.max_liquidity_usd
+            ):
+                eligible_scalp = True
 
         eligible_swing = False
-        if (
-            age_hours is not None
-            and self.min_age_hours_swing <= age_hours <= self.max_age_hours_swing
-            and liquidity_usd >= self.min_liquidity_swing_usd
-            and liquidity_usd <= self.max_liquidity_usd
-        ):
-            eligible_swing = True
+        if is_consolidated:
+            # Ativos consolidados/prioritários podem operar Swing com base puramente na liquidez e estrutura
+            if (age_hours is None or age_hours >= self.min_age_hours_swing) and liquidity_usd >= self.min_liquidity_swing_usd:
+                eligible_swing = True
+        else:
+            if (
+                age_hours is not None
+                and self.min_age_hours_swing <= age_hours <= self.max_age_hours_swing
+                and liquidity_usd >= self.min_liquidity_swing_usd
+                and liquidity_usd <= self.max_liquidity_usd
+            ):
+                eligible_swing = True
 
         return {
             "has_pair_data": bool(pair_data),
             "age_hours": age_hours,
+            "is_consolidated": is_consolidated,
             "volume_1h_usd": volume_1h,
             "volume_24h_usd": volume_24h,
             "price_change_5m_pct": price_change_5m,
@@ -223,6 +245,7 @@ class MarketDynamicsValidator:
         metrics = self.extract_metrics(token)
         has_pair = metrics["has_pair_data"]
         age_hours = metrics["age_hours"]
+        is_consolidated = bool(metrics.get("is_consolidated", False))
         volume_1h = metrics["volume_1h_usd"]
         volume_24h = metrics["volume_24h_usd"]
         price_change_5m = metrics["price_change_5m_pct"]
@@ -256,9 +279,10 @@ class MarketDynamicsValidator:
                 return False, reason, metrics
 
         # =========================================================================
-        # HARD GATE B: TETO DE LIQUIDEZ E ANTI-FAKE CLMM
+        # HARD GATE B: TETO DE LIQUIDEZ E ANTI-FAKE CLMM (EXCETO CONSOLIDADOS)
         # =========================================================================
-        if liquidity_usd > self.max_liquidity_usd:
+        is_consolidated = bool(metrics.get("is_consolidated", False))
+        if not is_consolidated and liquidity_usd > self.max_liquidity_usd:
             reason = (
                 f"Liquidez excessiva (${liquidity_usd:,.2f} > ${self.max_liquidity_usd:,.2f}) - "
                 f"Risco de piscina CLMM concentrada artificialmente"
@@ -425,12 +449,12 @@ class MarketDynamicsValidator:
 
         if mode_upper == "SCALP_ONLY":
             if not eligible_scalp:
-                if age_hours is not None and age_hours < self.min_age_hours_scalp:
+                if not is_consolidated and age_hours is not None and age_hours < self.min_age_hours_scalp:
                     reason = (
                         f"Idade do token ({age_hours * 60.0:.0f}m) abaixo do mínimo para Scalp "
                         f"({self.min_age_hours_scalp * 60.0:.0f}m) - Risco de sniper dump"
                     )
-                elif age_hours is not None and age_hours > self.max_age_hours_scalp:
+                elif not is_consolidated and age_hours is not None and age_hours > self.max_age_hours_scalp:
                     reason = (
                         f"Idade do token ({age_hours:.1f}h) acima do teto para Scalp "
                         f"({self.max_age_hours_scalp:.1f}h / 30 dias)"
@@ -445,12 +469,12 @@ class MarketDynamicsValidator:
 
         elif mode_upper == "SWING_ONLY":
             if not eligible_swing:
-                if age_hours is not None and age_hours < self.min_age_hours_swing:
+                if not is_consolidated and age_hours is not None and age_hours < self.min_age_hours_swing:
                     reason = (
                         f"Idade do token ({age_hours:.1f}h) abaixo da janela de entrada para Swing "
                         f"({self.min_age_hours_swing:.1f}h a {self.max_age_hours_swing:.1f}h) - Falta de consolidação"
                     )
-                elif age_hours is not None and age_hours > self.max_age_hours_swing:
+                elif not is_consolidated and age_hours is not None and age_hours > self.max_age_hours_swing:
                     reason = (
                         f"Idade do token ({age_hours:.1f}h) fora da janela de entrada para Swing "
                         f"({self.min_age_hours_swing:.1f}h a {self.max_age_hours_swing:.1f}h)"
@@ -465,12 +489,12 @@ class MarketDynamicsValidator:
 
         else:  # "DUAL"
             if not eligible_scalp and not eligible_swing:
-                if age_hours is not None and age_hours < self.min_age_hours_scalp:
+                if not is_consolidated and age_hours is not None and age_hours < self.min_age_hours_scalp:
                     reason = (
                         f"Idade do token ({age_hours * 60.0:.0f}m) abaixo do mínimo de segurança "
                         f"({self.min_age_hours_scalp * 60.0:.0f}m) - Risco de sniper dump"
                     )
-                elif age_hours is not None and age_hours > self.max_age_hours_scalp:
+                elif not is_consolidated and age_hours is not None and age_hours > self.max_age_hours_scalp:
                     reason = (
                         f"Idade do token ({age_hours:.1f}h) excede o teto máximo de mercado "
                         f"({self.max_age_hours_scalp:.1f}h / 30 dias)"

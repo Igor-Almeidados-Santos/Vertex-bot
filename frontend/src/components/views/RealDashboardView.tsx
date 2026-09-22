@@ -95,7 +95,6 @@ export function RealDashboardView() {
   const [privateKeyInput, setPrivateKeyInput] = useState("");
   const [showPrivateKey, setShowPrivateKey] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"POSITIONS" | "ORDERS">("POSITIONS");
   const [priorityTokens, setPriorityTokens] = useState<PriorityToken[]>([]);
   const [activeTab, setActiveTab] = useState<"POSITIONS" | "ORDERS" | "PRIORITY">("POSITIONS");
 
@@ -124,7 +123,6 @@ export function RealDashboardView() {
   const fetchData = useCallback(async (quiet = false) => {
     if (!quiet) setIsRefreshing(true);
     try {
-      const [st, sm, pos, ord, wls] = await Promise.all([
       const [st, sm, pos, ord, wls, pts] = await Promise.all([
         getBotStatus("live").catch(() => null),
         getSummary("live").catch(() => null),
@@ -1163,142 +1161,6 @@ export function RealDashboardView() {
 
         {/* Tab 3: Lista de Prioridades (Tokens Aprovados e Negociados) */}
         {activeTab === "PRIORITY" && (
-          <div className="space-y-4">
-            <div className="p-4 rounded-xl border border-brand-500/30 bg-brand-500/10 text-xs text-brand-300 flex items-start gap-3">
-              <Star className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <span className="font-bold text-white block text-sm">
-                  Pool de Prioridades de Negociação (Ativos Vencedores &amp; Consolidados)
-                </span>
-                <p className="text-gray-300 leading-relaxed">
-                  Tokens que foram aprovados pelo validador e tiveram ordens executadas pelo bot.
-                  Enquanto mantiverem liquidez ativa e estrutura técnica saudável (&quot;sem morrer&quot;), o Vertex-Bot
-                  <strong> prioriza a alocação de capital e reentradas nestes ativos</strong> antes de abrir posições em novos tokens do scanner.
-                </p>
-              </div>
-            </div>
-
-            {priorityTokens.length === 0 ? (
-              <div className="flex flex-col items-center justify-center p-12 rounded-2xl border border-dashed border-border bg-surface/50 text-center">
-                <div className="w-12 h-12 rounded-full bg-surface-card border border-border flex items-center justify-center text-amber-400 mb-3">
-                  <Star className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-semibold text-white">Nenhum Ativo no Pool de Prioridades</h3>
-                <p className="text-sm text-gray-400 max-w-sm mt-1">
-                  Assim que o bot executar as primeiras operações reais e confirmar tokens saudáveis no mercado, eles serão catalogados aqui com prioridade contínua de negociação.
-                </p>
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-border bg-surface-card overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-border bg-surface/60 text-gray-400 font-medium">
-                        <th className="py-3 px-4">Ativo Prioritário</th>
-                        <th className="py-3 px-4">Categoria / Tier</th>
-                        <th className="py-3 px-4">Status no Pool</th>
-                        <th className="py-3 px-4">Preço Atual</th>
-                        <th className="py-3 px-4">Liquidez On-Chain</th>
-                        <th className="py-3 px-4">Trades Realizados</th>
-                        <th className="py-3 px-4">PnL Total Acumulado</th>
-                        <th className="py-3 px-4">Última Operação</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {priorityTokens.map((tok) => {
-                        const isConsolidated = tok.tier === "CONSOLIDATED";
-                        const isProfitable = tok.total_realized_pnl_usd >= 0;
-                        const solscanUrl = `https://solscan.io/account/${tok.address}`;
-
-                        return (
-                          <tr key={tok.address} className="hover:bg-surface-hover/50 transition-colors">
-                            <td className="py-3 px-4">
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold font-mono text-white text-sm">
-                                  {tok.symbol}
-                                </span>
-                                <ChainBadge chain={tok.chain} />
-                              </div>
-                              <div className="flex items-center gap-1.5 mt-0.5">
-                                <span className="text-[10px] text-gray-400 font-mono">
-                                  {shortenAddress(tok.address, 6)}
-                                </span>
-                                <button
-                                  onClick={() => copyToClipboard(tok.address)}
-                                  className="p-0.5 rounded hover:bg-surface-hover text-gray-400 hover:text-white"
-                                  title="Copiar Endereço"
-                                >
-                                  {copiedAddress === tok.address ? <Check className="w-3 h-3 text-profit" /> : <Copy className="w-3 h-3" />}
-                                </button>
-                                <a
-                                  href={solscanUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="p-0.5 rounded hover:bg-surface-hover text-gray-400 hover:text-white"
-                                  title="Ver no Solscan"
-                                >
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
-                              </div>
-                            </td>
-
-                            <td className="py-3 px-4">
-                              <span
-                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold font-mono ${
-                                  isConsolidated
-                                    ? "bg-amber-500/15 text-amber-300 border border-amber-500/30"
-                                    : "bg-cyan-500/15 text-cyan-300 border border-cyan-500/30"
-                                }`}
-                              >
-                                {isConsolidated ? "🏛️ CONSOLIDADO" : "🚀 EM ASCENSÃO"}
-                              </span>
-                            </td>
-
-                            <td className="py-3 px-4">
-                              <span
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold font-mono ${
-                                  tok.is_active_priority && tok.is_alive
-                                    ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
-                                    : "bg-gray-500/15 text-gray-400 border border-gray-500/30"
-                                }`}
-                              >
-                                {tok.is_active_priority && tok.is_alive ? "⭐ PRIORIDADE MÁXIMA" : "⏸️ OBSERVAÇÃO"}
-                              </span>
-                            </td>
-
-                            <td className="py-3 px-4 font-mono text-white font-semibold">
-                              {formatCryptoPrice(tok.last_price)}
-                            </td>
-
-                            <td className="py-3 px-4 font-mono text-gray-300">
-                              {formatUSD(tok.current_liquidity_usd || tok.initial_liquidity_usd)}
-                            </td>
-
-                            <td className="py-3 px-4 font-mono text-gray-300">
-                              <span className="font-bold text-white">{tok.total_trades_count}</span> trades
-                              {tok.successful_trades_count > 0 && (
-                                <span className="text-profit ml-1 text-[11px]">({tok.successful_trades_count} com lucro)</span>
-                              )}
-                            </td>
-
-                            <td className="py-3 px-4 font-mono font-bold">
-                              <span className={isProfitable ? "text-profit" : "text-loss"}>
-                                {isProfitable ? "+" : ""}{formatUSD(tok.total_realized_pnl_usd)}
-                              </span>
-                            </td>
-
-                            <td className="py-3 px-4 font-mono text-gray-400 text-[11px]">
-                              {formatTimeAgo(tok.last_traded_at || tok.added_at)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </div>
           <PriorityPoolTab mode="live" />
         )}
       </div>

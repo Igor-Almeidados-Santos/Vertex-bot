@@ -3,6 +3,7 @@ Validador Central de Segurança do Vertex-bot (Camada de Triagem).
 Executa os 6 Hard Gates de proteção de capital e emite laudo de auditoria.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -90,6 +91,31 @@ class SecurityValidator:
                     sell_tax_percentage=0.0,
                 )
 
+        # Identificação de Maturidade / Consolidação do Token (>24h)
+        age_hours: float | None = None
+        raw_evt = token.raw_event if isinstance(token.raw_event, dict) else {}
+        if "age_hours" in raw_evt and raw_evt["age_hours"] is not None:
+            try:
+                age_hours = float(raw_evt["age_hours"])
+            except (ValueError, TypeError):
+                pass
+        if age_hours is None and "pair_data" in raw_evt and isinstance(raw_evt["pair_data"], dict):
+            c_ms = raw_evt["pair_data"].get("pairCreatedAt")
+            if c_ms:
+                try:
+                    now_ms = datetime.now(UTC).timestamp() * 1000.0
+                    age_hours = max(0.0, (now_ms - float(c_ms)) / (1000.0 * 3600.0))
+                except Exception:
+                    pass
+
+        is_consolidated = bool(
+            (age_hours is not None and age_hours >= 24.0)
+            or (raw_evt.get("token_tier") == "CONSOLIDATED")
+            or bool(raw_evt.get("is_established"))
+            or bool(raw_evt.get("is_top_ranked"))
+            or bool(raw_evt.get("is_priority"))
+        )
+
         # 2. Roteamento por Chain: Redes EVM (Base, Arbitrum, BSC, etc.) vs Solana
         chain_name = str(token.chain or "solana").lower().strip()
         if chain_name != "solana":
@@ -97,6 +123,8 @@ class SecurityValidator:
                 chain=chain_name,
                 token_address=token.address,
                 mock_override=mo.get("is_evm_safe") if "is_evm_safe" in mo else None,  # type: ignore
+                is_consolidated=is_consolidated,
+                age_hours=age_hours,
             )
             if not is_evm_safe:
                 return await self._build_rejection(
@@ -155,11 +183,14 @@ class SecurityValidator:
                 mock_override=mo.get("is_mint_revoked") if "is_mint_revoked" in mo else None,  # type: ignore
             )
             if not is_mint_revoked:
-                return await self._build_rejection(
-                    token.address,
-                    "Mint Authority ATIVA (risco de emissão infinita)",
-                    is_mint_revoked=False,
-                )
+                if not is_consolidated:
+                    return await self._build_rejection(
+                        token.address,
+                        "Mint Authority ATIVA (risco de emissão infinita)",
+                        is_mint_revoked=False,
+                    )
+                else:
+                    logger.info("ℹ️ [SOLANA MINT PERMITIDO] Token consolidado (>24h) %s possui Mint Authority ativa.", token.address)
 
             # Checagem de Freeze Authority
             is_freeze_revoked = await SecurityChecks.check_freeze_authority(
@@ -184,14 +215,24 @@ class SecurityValidator:
                 mock_burn_pct=mo.get("lp_burn_pct") if "lp_burn_pct" in mo else None,  # type: ignore
             )
             if not is_lp_safe:
-                return await self._build_rejection(
-                    token.address,
-                    f"LP não bloqueada ou queimada insuficientemente ({burn_pct:.1f}% < 98%)",
-                    is_mint_revoked=True,
-                    is_freeze_revoked=True,
-                    is_lp_safe=False,
-                    burn_pct=burn_pct,
-                )
+                if is_consolidated and token.initial_liquidity_usd >= self.min_liquidity_usd:
+                    is_lp_safe = True
+                    burn_pct = 100.0
+                    logger.info(
+                        "ℹ️ [SOLANA LP CONSOLIDADA] Token consolidado (>24h) %s com liquidez em pool AMM oficial (%s, $%.2f). Aprovado na verificação de LP.",
+                        token.address,
+                        token.dex,
+                        float(token.initial_liquidity_usd),
+                    )
+                else:
+                    return await self._build_rejection(
+                        token.address,
+                        f"LP não bloqueada ou queimada insuficientemente ({burn_pct:.1f}% < 98%)",
+                        is_mint_revoked=is_mint_revoked,
+                        is_freeze_revoked=True,
+                        is_lp_safe=False,
+                        burn_pct=burn_pct,
+                    )
 
             # Checagem de Concentração de Top 10 Holders
             top10_pct = await SecurityChecks.check_top10_concentration(
@@ -201,13 +242,15 @@ class SecurityValidator:
                 pool_address=token.pool_address,
                 dex=token.dex,
             )
-            if top10_pct > self.max_top10_pct:
+            max_top10_allowed = max(self.max_top10_pct, 35.0) if is_consolidated else self.max_top10_pct
+            max_top10_allowed = max(self.max_top10_pct, 45.0) if is_consolidated else self.max_top10_pct
+            if top10_pct > max_top10_allowed:
                 return await self._build_rejection(
                     token.address,
-                    f"Concentração de Top 10 Holders excessiva ({top10_pct:.1f}% > {self.max_top10_pct:.1f}%)",
-                    is_mint_revoked=True,
+                    f"Concentração de Top 10 Holders excessiva ({top10_pct:.1f}% > {max_top10_allowed:.1f}%)",
+                    is_mint_revoked=is_mint_revoked,
                     is_freeze_revoked=True,
-                    is_lp_safe=True,
+                    is_lp_safe=is_lp_safe,
                     burn_pct=burn_pct,
                     top10_pct=top10_pct,
                 )

@@ -72,7 +72,7 @@ class MatureTokenScanner:
         dexscreener_base_url: str = "https://api.dexscreener.com",
         geckoterminal_base_url: str = "https://api.geckoterminal.com",
         max_seen_cache: int = 10000,
-        enable_established_pools: bool = False,
+        enable_established_pools: bool = True,
         min_age_hours_consolidated: float = 720.0,
         max_age_hours_consolidated: float = 87600.0,
         target_chains: tuple[str, ...] | list[str] = (
@@ -117,6 +117,8 @@ class MatureTokenScanner:
         self._gecko_cycle_idx: int = 0
         self._established_pages_cycle: list[int] = [1, 2, 3]
         self._established_cycle_idx: int = 0
+        self._top_ranked_cycle_idx: int = 0
+        self._top_ranked_page_offsets: list[int] = [1, 6]
         self._search_cycle_idx: int = 0
         self.is_running: bool = False
         self._task: asyncio.Task[None] | None = None
@@ -573,6 +575,8 @@ class MatureTokenScanner:
         if self.enable_established_pools:
             established_pools = await self._fetch_geckoterminal_established_pools()
             results.extend(established_pools)
+            top_ranked_pools = await self._fetch_geckoterminal_top_ranked_pools(pages_per_cycle=5)
+            results.extend(top_ranked_pools)
 
         # 5. Ordena todos os candidatos dos mais antigos para os mais novos (Oldest to Newest)
         # Garante que tokens históricos consolidados (ex: Raydium de 3+ anos) sejam avaliados primeiro
@@ -879,6 +883,123 @@ class MatureTokenScanner:
 
         return pools_out
 
+    async def _fetch_geckoterminal_top_ranked_pools(
+        self,
+        pages_per_cycle: int = 5,
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """
+        Consulta de forma paginada as pools ranqueadas (Top 100/200) no GeckoTerminal
+        por rede (Solana, Base, Arbitrum, BSC, etc.) e DEXes líderes (Raydium, Orca, Aerodrome, Camelot).
+        Percorre sistematicamente as páginas (1-5 para Top 1-100, 6-10 para Top 101-200)
+        e enriquece os metadados dos tokens em lote via DexScreener.
+        """
+        pools_out: list[tuple[str, dict[str, Any]]] = []
+        gecko_nets = [
+            self.GECKO_NETWORK_MAP.get(c, c)
+            for c in self.target_chains
+            if c in self.GECKO_NETWORK_MAP or c in self.GECKO_NETWORK_MAP.values()
+        ]
+        if not gecko_nets:
+            gecko_nets = ["solana"]
+
+        # Constrói lista de endpoints alvo (Redes e DEXes Líderes)
+        endpoints_to_probe: list[str] = []
+        for net in gecko_nets:
+            endpoints_to_probe.append(f"networks/{net}/pools")
+            if net == "solana":
+                endpoints_to_probe.append("networks/solana/dexes/raydium/pools")
+                endpoints_to_probe.append("networks/solana/dexes/orca/pools")
+            elif net == "base":
+                endpoints_to_probe.append("networks/base/dexes/aerodrome-slipstream/pools")
+            elif net == "arbitrum":
+                endpoints_to_probe.append("networks/arbitrum/dexes/camelot/pools")
+
+        if not endpoints_to_probe:
+            return pools_out
+
+        # Rotaciona o endpoint e a janela de páginas (offset 1 = págs 1..5; offset 6 = págs 6..10)
+        chosen_endpoint = endpoints_to_probe[self._top_ranked_cycle_idx % len(endpoints_to_probe)]
+        start_page = self._top_ranked_page_offsets[(self._top_ranked_cycle_idx // len(endpoints_to_probe)) % len(self._top_ranked_page_offsets)]
+        self._top_ranked_cycle_idx += 1
+
+        pages_to_fetch = list(range(start_page, start_page + pages_per_cycle))
+        urls = [f"{self.geckoterminal_base_url}/api/v2/{chosen_endpoint}?page={p}" for p in pages_to_fetch]
+
+        # Executa requisições das páginas da janela
+        tasks = [self._http_get_json(u) for u in urls]
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+        found_candidates: list[tuple[str, dict[str, Any]]] = []
+        unseen_addresses: list[str] = []
+
+        for p_idx, res in enumerate(responses):
+            current_page = pages_to_fetch[p_idx]
+            if isinstance(res, dict) and "data" in res and isinstance(res["data"], list):
+                for pool in res["data"]:
+                    try:
+                        attrs = pool.get("attributes", {})
+                        rel = pool.get("relationships", {})
+                        base_token_id = (
+                            rel.get("base_token", {}).get("data", {}).get("id", "")
+                        )
+                        detected_net: str | None = None
+                        raw_addr: str = ""
+                        for prefix, net_name in self.GECKO_PREFIX_MAP.items():
+                            if base_token_id.startswith(prefix):
+                                raw_addr = base_token_id[len(prefix):]
+                                detected_net = net_name
+                                break
+
+                        if not detected_net or not raw_addr:
+                            for net in gecko_nets:
+                                prefix = f"{net}_"
+                                if base_token_id.startswith(prefix):
+                                    raw_addr = base_token_id[len(prefix):]
+                                    rev_map = {v: k for k, v in self.GECKO_NETWORK_MAP.items()}
+                                    detected_net = rev_map.get(net, net)
+                                    break
+
+                        if not raw_addr or not detected_net:
+                            continue
+
+                        if self._is_candidate_needed(raw_addr):
+                            reserve_usd = attrs.get("reserve_in_usd")
+                            if reserve_usd is not None:
+                                try:
+                                    if float(reserve_usd) < float(self.min_liquidity_usd):
+                                        continue
+                                except (ValueError, TypeError):
+                                    pass
+
+                            hint = {
+                                "chain": detected_net,
+                                "pool_created_at": attrs.get("pool_created_at"),
+                                "pool_address": attrs.get("address"),
+                                "reserve_usd": reserve_usd,
+                                "name": attrs.get("name"),
+                                "is_established": True,
+                                "is_top_ranked": True,
+                                "ranking_page": current_page,
+                            }
+                            found_candidates.append((raw_addr, hint))
+                            if raw_addr not in unseen_addresses:
+                                unseen_addresses.append(raw_addr)
+                    except Exception as parse_err:
+                        logger.debug("Erro ao parsear pool ranqueada GeckoTerminal: %s", parse_err)
+
+        # Enriquecimento em lote com DexScreener para obter metadados detalhados de candles e criação
+        if unseen_addresses:
+            batch_pairs = await self._query_dexscreener_pairs_batch(unseen_addresses)
+            for addr, hint in found_candidates:
+                pair_data = batch_pairs.get(addr)
+                if pair_data:
+                    hint["pair_data"] = pair_data
+                pools_out.append((addr, hint))
+        else:
+            pools_out.extend(found_candidates)
+
+        return pools_out
+
 
     def _resolve_candidate_age(
         self,
@@ -971,7 +1092,7 @@ class MatureTokenScanner:
         # assegurando que tokens históricos como Raydium (3+ anos) sejam aprovados e negociados.
         effective_max_age = (
             self.max_age_hours_consolidated
-            if (self.enable_established_pools or age_hours >= self.min_age_hours_consolidated or hint.get("is_established"))
+            if (self.enable_established_pools or age_hours >= self.min_age_hours_consolidated or hint.get("is_established") or hint.get("is_top_ranked"))
             else self.max_age_hours
         )
 
@@ -1087,7 +1208,23 @@ class MatureTokenScanner:
                     return None, True
 
         # Pré-filtro de liquidez mínima e máxima (anti-fake CLMM e pools sem liquidez):
-        if liquidity_usd < self.min_liquidity_usd or liquidity_usd > self.max_liquidity_usd:
+        is_consolidated_candidate = (
+            self.enable_established_pools
+            or age_hours >= self.min_age_hours_consolidated
+            or bool(hint.get("is_established"))
+            or bool(hint.get("is_top_ranked"))
+            or bool(hint.get("is_priority"))
+        )
+        if liquidity_usd < self.min_liquidity_usd:
+            logger.debug(
+                "Token %s descartado no pré-filtro: liquidez ($%.2f) abaixo do mínimo seguro $%.2f.",
+                token_address,
+                liquidity_usd,
+                self.min_liquidity_usd,
+            )
+            return None, True
+
+        if not is_consolidated_candidate and liquidity_usd > self.max_liquidity_usd:
             logger.debug(
                 "Token %s descartado no pré-filtro: liquidez ($%.2f) fora da faixa segura [$%.2f, $%.2f].",
                 token_address,

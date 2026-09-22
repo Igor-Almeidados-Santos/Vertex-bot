@@ -615,6 +615,54 @@ class DashboardServer:
         current_cash = wallet_usd if wallet_usd is not None else initial_wallet
         return initial_wallet, current_cash
 
+    def _resolve_slot_quotas(self, mode: str = "paper") -> dict[str, int]:
+        """Obtém ou calcula a distribuição de cotas 50/50 de slots de posições."""
+        m = mode.strip().lower()
+        if self.orchestrator and hasattr(self.orchestrator, "get_slot_quotas"):
+            try:
+                quotas = self.orchestrator.get_slot_quotas(m)
+                if isinstance(quotas, dict):
+                    return {
+                        "max_positions": int(quotas.get("max_positions", 10)),
+                        "priority_slots_max": int(quotas.get("priority_slots_max", 5)),
+                        "priority_slots_used": int(quotas.get("priority_slots_used", 0)),
+                        "new_tokens_slots_max": int(quotas.get("new_tokens_slots_max", 5)),
+                        "new_tokens_slots_used": int(quotas.get("new_tokens_slots_used", 0)),
+                        "total_active": int(quotas.get("total_active", 0)),
+                    }
+            except Exception:
+                pass
+
+        st_file = get_status_file(m)
+        if st_file.exists():
+            try:
+                data = json.loads(st_file.read_text(encoding="utf-8"))
+                raw_quotas = data.get("slot_quotas")
+                if isinstance(raw_quotas, dict) and "priority_slots_max" in raw_quotas:
+                    return {
+                        "max_positions": int(raw_quotas.get("max_positions", 10)),
+                        "priority_slots_max": int(raw_quotas.get("priority_slots_max", 5)),
+                        "priority_slots_used": int(raw_quotas.get("priority_slots_used", 0)),
+                        "new_tokens_slots_max": int(raw_quotas.get("new_tokens_slots_max", 5)),
+                        "new_tokens_slots_used": int(raw_quotas.get("new_tokens_slots_used", 0)),
+                        "total_active": int(raw_quotas.get("total_active", 0)),
+                    }
+            except Exception:
+                pass
+
+        settings_dict = self._get_active_settings(mode=m)
+        max_pos = int(settings_dict.get("live_max_concurrent_positions" if m == "live" else "max_concurrent_positions", 10))
+        p_cap = max(1, (max_pos + 1) // 2)
+        n_cap = max(1, max_pos - p_cap)
+        return {
+            "max_positions": max_pos,
+            "priority_slots_max": p_cap,
+            "priority_slots_used": 0,
+            "new_tokens_slots_max": n_cap,
+            "new_tokens_slots_used": 0,
+            "total_active": 0,
+        }
+
     async def handle_summary(self, request: web.Request) -> web.Response:
         """Retorna resumo consolidado de métricas e KPIs filtrado pelo modo (PAPER ou LIVE)."""
         try:
@@ -640,6 +688,8 @@ class DashboardServer:
             except TypeError:
                 waiting_tokens_count = len(self._get_waiting_tokens())
 
+            slot_quotas = self._resolve_slot_quotas(mode=mode)
+
             payload = {
                 "status": "success",
                 "data": {
@@ -647,6 +697,7 @@ class DashboardServer:
                     "scanner": tokens_summary,
                     "session_mode": mode.upper(),
                     "waiting_tokens_count": waiting_tokens_count,
+                    "slot_quotas": slot_quotas,
                 },
             }
             return web.json_response(
@@ -819,6 +870,75 @@ class DashboardServer:
             logger.error("Erro ao consultar Lista de Prioridades no dashboard: %s", exc)
             return web.json_response({"status": "error", "message": str(exc)}, status=500)
 
+    async def handle_purge_priority_tokens(self, request: web.Request) -> web.Response:
+        """
+        Executa faxina na Lista de Prioridades removendo tokens mortos ou sem liquidez/volume.
+        Suporta o parâmetro 'mode' via query param ou body JSON (padrão: 'paper').
+        """
+        try:
+            mode: str | None = request.query.get("mode")
+            if not mode and request.can_read_body:
+                try:
+                    body = await request.json()
+                    if isinstance(body, dict) and "mode" in body:
+                        mode = str(body["mode"])
+                except Exception:
+                    pass
+
+            selected_mode = (mode or "paper").lower().strip()
+
+            # 1. Se o orchestrator estiver disponível com o método dedicado
+            if self.orchestrator and hasattr(self.orchestrator, "audit_and_purge_priority_pool"):
+                res: dict[str, Any] = await self.orchestrator.audit_and_purge_priority_pool(selected_mode)
+                return web.json_response({"status": "success", "data": res})
+
+            # 2. Modo fallback: standalone sem orchestrator em memória
+            from src.engine.priority_pool import PriorityPoolManager
+            from src.engine.price_feed import DexScreenerPriceFeed
+
+            pool_manager = PriorityPoolManager(mode=selected_mode)
+            tokens = pool_manager.get_all_priority_tokens()
+            if not tokens:
+                return web.json_response({
+                    "status": "success",
+                    "data": {
+                        "mode": selected_mode.upper(),
+                        "purged_count": 0,
+                        "remaining_count": 0,
+                        "purged": [],
+                    },
+                })
+
+            addresses = [str(t["token_address"]) for t in tokens]
+            price_feed = DexScreenerPriceFeed()
+            try:
+                prices = await price_feed.fetch_prices(addresses)
+            except Exception as e:
+                logger.warning("Falha ao buscar preços na faxina avulsa do dashboard: %s", e)
+                prices = {}
+
+            pairs_data: dict[str, dict[str, Any]] = {}
+            for addr in addresses:
+                pd = price_feed.get_pair_data(addr)
+                if pd:
+                    pairs_data[addr] = pd
+
+            await price_feed.close()
+            purged = pool_manager.purge_dead_or_unprofitable_tokens(prices, pairs_data)
+
+            return web.json_response({
+                "status": "success",
+                "data": {
+                    "mode": selected_mode.upper(),
+                    "purged_count": len(purged),
+                    "remaining_count": pool_manager.count(),
+                    "purged": purged,
+                },
+            })
+        except Exception as exc:
+            logger.error("Erro ao executar faxina na Lista de Prioridades no dashboard: %s", exc)
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
     async def handle_get_wallets(self, request: web.Request) -> web.Response:
         """Retorna as carteiras reais conectadas e seus saldos on-chain."""
         wallets: list[dict[str, Any]] = []
@@ -983,6 +1103,8 @@ class DashboardServer:
                 except Exception:
                     pass
 
+        slot_quotas = self._resolve_slot_quotas(mode=mode)
+
         payload = {
             "status": "success",
             "data": {
@@ -994,6 +1116,11 @@ class DashboardServer:
                 "initial_wallet_usd": initial_wallet,
                 "active_positions_count": active_positions_count,
                 "waiting_tokens_count": waiting_tokens_count,
+                "slot_quotas": slot_quotas,
+                "priority_slots_max": slot_quotas["priority_slots_max"],
+                "priority_slots_used": slot_quotas["priority_slots_used"],
+                "new_tokens_slots_max": slot_quotas["new_tokens_slots_max"],
+                "new_tokens_slots_used": slot_quotas["new_tokens_slots_used"],
                 "wallets": wallets_list,
                 "settings": settings_dict,
             },
@@ -1423,6 +1550,7 @@ def create_dashboard_app(db: DatabaseManager, orchestrator: Any | None = None) -
     app.router.add_get("/api/orders", server.handle_orders)
     app.router.add_get("/api/tokens", server.handle_tokens)
     app.router.add_get("/api/tokens/priority", server.handle_priority_tokens)
+    app.router.add_post("/api/tokens/priority/purge", server.handle_purge_priority_tokens)
     app.router.add_get("/api/waiting_tokens", server.handle_waiting_tokens)
     app.router.add_get("/api/waiting-tokens", server.handle_waiting_tokens)
 

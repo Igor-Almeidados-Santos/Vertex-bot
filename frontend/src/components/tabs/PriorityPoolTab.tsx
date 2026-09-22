@@ -13,9 +13,11 @@ import {
   Building2,
   Rocket,
   Filter,
+  Sparkles,
+  Trash2,
 } from "lucide-react";
 import { ChainBadge } from "@/components/ChainBadge";
-import { getPriorityTokens } from "@/lib/api";
+import { getPriorityTokens, purgePriorityTokens } from "@/lib/api";
 import { PriorityToken } from "@/types/bot";
 import { formatUSD, formatCryptoPrice, shortenAddress } from "@/lib/formatters";
 
@@ -31,6 +33,8 @@ export function PriorityPoolTab({ mode }: PriorityPoolTabProps) {
   const [selectedOrigin, setSelectedOrigin] = useState<"ALL" | "LIVE" | "PAPER" | "BOTH">("ALL");
   const [selectedTier, setSelectedTier] = useState<"ALL" | "CONSOLIDATED" | "EMERGING">("ALL");
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+  const [isPurging, setIsPurging] = useState(false);
+  const [purgeNotification, setPurgeNotification] = useState<{ message: string; count: number } | null>(null);
 
   const fetchTokens = async (showLoading = false) => {
     if (showLoading) setIsLoading(true);
@@ -43,6 +47,37 @@ export function PriorityPoolTab({ mode }: PriorityPoolTabProps) {
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
+    }
+  };
+
+  const handlePurge = async () => {
+    if (isPurging) return;
+    setIsPurging(true);
+    try {
+      const result = await purgePriorityTokens(mode);
+      const count = result.purged_count || 0;
+      if (count > 0) {
+        setPurgeNotification({
+          message: `Faxina concluída: ${count} token(s) mortos ou sem liquidez eliminados com sucesso!`,
+          count,
+        });
+      } else {
+        setPurgeNotification({
+          message: "Pool 100% saudável: nenhum token morto ou sem liquidez detectado.",
+          count: 0,
+        });
+      }
+      setTimeout(() => setPurgeNotification(null), 6000);
+      await fetchTokens(false);
+    } catch (err) {
+      console.error("Erro ao executar faxina de prioridades:", err);
+      setPurgeNotification({
+        message: "Erro ao executar auditoria/faxina na lista de prioridades.",
+        count: -1,
+      });
+      setTimeout(() => setPurgeNotification(null), 6000);
+    } finally {
+      setIsPurging(false);
     }
   };
 
@@ -250,10 +285,21 @@ export function PriorityPoolTab({ mode }: PriorityPoolTabProps) {
             </button>
           </div>
 
+          {/* Botão Faxina de Prioridades */}
+          <button
+            onClick={handlePurge}
+            disabled={isPurging || isRefreshing}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 hover:text-amber-200 text-xs font-semibold transition-colors disabled:opacity-50"
+            title="Analisar e eliminar tokens mortos, sem liquidez ou sem possibilidade de lucro"
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${isPurging ? "animate-spin text-amber-400" : ""}`} />
+            <span>{isPurging ? "Auditando..." : "Faxina"}</span>
+          </button>
+
           {/* Botão Atualizar */}
           <button
             onClick={() => fetchTokens(false)}
-            disabled={isRefreshing}
+            disabled={isRefreshing || isPurging}
             className="p-1.5 rounded-xl bg-surface hover:bg-surface-hover border border-border text-gray-400 hover:text-white transition-colors"
             title="Atualizar lista"
           >
@@ -261,6 +307,30 @@ export function PriorityPoolTab({ mode }: PriorityPoolTabProps) {
           </button>
         </div>
       </div>
+
+      {/* Banner de Notificação da Faxina */}
+      {purgeNotification && (
+        <div
+          className={`p-3 rounded-xl border text-xs flex items-center justify-between transition-all ${
+            purgeNotification.count > 0
+              ? "bg-amber-500/15 border-amber-500/40 text-amber-200"
+              : purgeNotification.count === 0
+              ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-200"
+              : "bg-red-500/15 border-red-500/40 text-red-200"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 shrink-0" />
+            <span className="font-medium">{purgeNotification.message}</span>
+          </div>
+          <button
+            onClick={() => setPurgeNotification(null)}
+            className="text-gray-400 hover:text-white text-xs px-1 font-bold"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Tabela de Tokens Prioritários */}
       {filteredTokens.length === 0 ? (

@@ -39,7 +39,6 @@ import { ConfigModal } from "@/components/modals/ConfigModal";
 import { RestartModal } from "@/components/modals/RestartModal";
 import { depositCash, stopBot, startBot, pauseBot, resumeBot } from "@/lib/api";
 
-type SimSubTab = "OPEN_POSITIONS" | "CLOSED_POSITIONS" | "WAITING_QUEUE" | "ORDERS";
 type SimSubTab = "OPEN_POSITIONS" | "CLOSED_POSITIONS" | "PRIORITY_POOL" | "WAITING_QUEUE" | "ORDERS";
 type TokensSubTab = "CATALOG" | "REJECTIONS" | "INCUBATOR";
 

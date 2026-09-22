@@ -197,9 +197,9 @@ async def test_evaluate_and_execute_entry_respects_max_concurrent_positions(
         await orch._evaluate_and_execute_entry(new_token)
         orch.execution_engine.execute_buy.assert_not_awaited()
 
-        # Aumenta limite dinamicamente para 2 posições
-        orch.update_dynamic_config({"max_concurrent_positions": 2})
-        assert orch.settings.MAX_CONCURRENT_POSITIONS == 2
+        # Aumenta limite dinamicamente para 4 posições (2 prioritárias, 2 novas)
+        orch.update_dynamic_config({"max_concurrent_positions": 4})
+        assert orch.settings.MAX_CONCURRENT_POSITIONS == 4
 
         # Agora deve permitir abrir a posição
         await orch._evaluate_and_execute_entry(new_token)
@@ -229,7 +229,7 @@ async def test_evaluate_entry_rejects_tokens_older_than_max_age(
     mock_settings: Settings,
     tmp_path: Path,
 ) -> None:
-    """Valida se tokens fora da janela da estratégia (SWING: 2h-4h, SCALP: 30m-720h) são descartados."""
+    """Valida se tokens fora da janela da estratégia (SWING: 3h-6h, SCALP: 30m-720h) são descartados."""
     custom_cfg_path = tmp_path / "bot_config.json"
 
     with patch.object(VertexBotOrchestrator, "_get_config_path", return_value=custom_cfg_path):
@@ -239,13 +239,13 @@ async def test_evaluate_entry_rejects_tokens_older_than_max_age(
         orch.execution_engine.execute_buy = AsyncMock(return_value=None)  # type: ignore[method-assign]
         orch.chart_auditor.audit_token_pre_entry = AsyncMock(return_value=(True, None, {}))  # type: ignore[method-assign]
 
-        # Token velho para Swing (6h de vida > 4.0h limite)
+        # Token velho para Swing (8h de vida > 6.0h limite)
         old_token = TokenMetadata(
             address="OldToken111111111111111111111111111111111111",
             dex="raydium",
             initial_liquidity_usd=Decimal("25000.0"),
             symbol="OLD",
-            raw_event={"age_hours": 6.0},
+            raw_event={"age_hours": 8.0},
         )
         await orch._evaluate_and_execute_entry(old_token)
         orch.execution_engine.execute_buy.assert_not_awaited()

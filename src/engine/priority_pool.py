@@ -354,11 +354,137 @@ class PriorityPoolManager:
         """Obtém registro de um token específico no pool."""
         return self._tokens.get(address)
 
+    def get_token(self, address: str) -> PriorityTokenRecord | None:
+        """Alias para get_candidate_record."""
+        return self._tokens.get(address)
+
+    def remove_token(self, address: str, reason: str = "", save: bool = True) -> bool:
+        """Remove permanentemente um token da Lista de Prioridades e persiste em disco."""
+        if address in self._tokens:
+            rec = self._tokens.pop(address)
+            if save:
+                self._save_to_disk()
+            logger.info(
+                "🗑️ [PRIORITY POOL PURGE] Token %s (%s) eliminado da Lista de Prioridades. Motivo: %s",
+                rec.symbol,
+                address[:8],
+                reason or "Desconhecido",
+            )
+            return True
+        return False
+
+    def evaluate_token_profitability(
+        self,
+        rec: PriorityTokenRecord,
+        current_price: Decimal | None,
+        pair_data: dict[str, Any] | None,
+    ) -> tuple[bool, str]:
+        """
+        Avalia se um token prioritário ainda existe e possui viabilidade/potencial de lucros.
+        Retorna (is_viable: bool, rejection_reason: str).
+        """
+        # 1. Inexistência de cotação ou token não localizado
+        if current_price is None or current_price <= Decimal("0.0"):
+            return False, "Token não localizado na DEX ou cotação inexistente/zerada"
+
+        price_float = float(current_price)
+        rec.last_price = price_float
+        rec.highest_price_seen = max(rec.highest_price_seen, price_float)
+        rec.last_evaluated_at = datetime.now(UTC).isoformat()
+
+        # 2. Avaliação de Liquidez
+        current_liq = rec.current_liquidity_usd
+        if pair_data and isinstance(pair_data.get("liquidity"), dict):
+            try:
+                current_liq = float(pair_data["liquidity"].get("usd", current_liq))
+                rec.current_liquidity_usd = current_liq
+            except (ValueError, TypeError):
+                pass
+
+        min_liq = float(self.min_alive_liquidity_usd)
+        if current_liq < min_liq:
+            return False, f"Liquidez drenada/insuficiente (${current_liq:,.2f} < ${min_liq:,.2f})"
+
+        # 3. Avaliação de Volume 24h (Liquidez de Negociação Ativa)
+        if pair_data and isinstance(pair_data.get("volume"), dict):
+            try:
+                vol_24h = float(pair_data["volume"].get("h24") or 0.0)
+                if vol_24h < 500.0:
+                    return False, f"Volume 24h morto (${vol_24h:,.2f}) / Mercado abandonado"
+            except (ValueError, TypeError):
+                pass
+
+        # 4. Avaliação de Queda Livre Catastrófica (Terminal Dump)
+        if rec.highest_price_seen > 0 and price_float > 0:
+            drop_pct = ((rec.highest_price_seen - price_float) / rec.highest_price_seen) * 100.0
+            if drop_pct >= float(self.max_catastrophic_drop_pct):
+                # Se for consolidado histórico com liquidez robusta (>= $50k), tolera correção
+                if rec.tier == "CONSOLIDATED" and current_liq >= 50000.0:
+                    pass
+                else:
+                    return False, f"Colapso catastrófico de preço (-{drop_pct:.1f}% do topo histórico de ${rec.highest_price_seen:.4f})"
+
+        # 5. Avaliação de Queda Contínua em 24h
+        if pair_data and isinstance(pair_data.get("priceChange"), dict):
+            try:
+                change_24h = float(pair_data["priceChange"].get("h24") or 0.0)
+                if change_24h < -50.0 and rec.tier != "CONSOLIDATED":
+                    return False, f"Despejo contínuo em 24h ({change_24h:.1f}%) sem repique"
+            except (ValueError, TypeError):
+                pass
+
+        return True, "Token ativo e saudável com potencial de lucro"
+
+    def purge_dead_or_unprofitable_tokens(
+        self,
+        market_prices: dict[str, Decimal],
+        pairs_data: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Analisa todos os tokens no pool de prioridades com cotações e pares atualizados.
+        Elimina definitivamente os ativos que não existem mais ou não têm potencial de lucro.
+        Retorna lista de tokens eliminados com detalhes da auditoria.
+        """
+        addresses_to_check = list(self._tokens.keys())
+        purged: list[dict[str, Any]] = []
+
+        for addr in addresses_to_check:
+            rec = self._tokens.get(addr)
+            if not rec:
+                continue
+
+            current_price = market_prices.get(addr) or market_prices.get(addr.lower())
+            pair_dict = pairs_data.get(addr) or pairs_data.get(addr.lower())
+
+            is_viable, reason = self.evaluate_token_profitability(rec, current_price, pair_dict)
+            if not is_viable:
+                self.remove_token(addr, reason=reason, save=False)
+                purged.append({
+                    "address": addr,
+                    "token_address": addr,
+                    "symbol": rec.symbol,
+                    "name": rec.name,
+                    "reason": reason,
+                    "last_price": rec.last_price,
+                    "liquidity_usd": rec.current_liquidity_usd,
+                })
+
+        if purged:
+            self._save_to_disk()
+            logger.info("🧹 [PRIORITY POOL] Faxina concluída: %d tokens inativos/mortos eliminados.", len(purged))
+
+        return purged
+
     def is_priority_token(self, address: str) -> bool:
         """Indica se o token está registrado e ativo na Lista de Prioridades."""
         rec = self._tokens.get(address)
         return bool(rec and rec.is_active_priority and rec.is_alive)
 
+    def is_priority(self, address: str) -> bool:
+        """Alias para is_priority_token."""
+        return self.is_priority_token(address)
+
     def count(self) -> int:
         return len(self._tokens)
+
 

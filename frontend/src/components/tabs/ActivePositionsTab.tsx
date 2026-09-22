@@ -174,6 +174,12 @@ export function ActivePositionsTab({ positions, onRefresh }: ActivePositionsTabP
           const chain = (pos.chain || "solana").toLowerCase();
           const dexUrl = `https://dexscreener.com/${chain}/${address}`;
 
+          const sameTokenPositions = activePositions.filter(
+            (p) => (p.token_address || p.address) === address
+          );
+          const hasMultiplePositions = sameTokenPositions.length > 1;
+          const posIndex = sameTokenPositions.findIndex((p) => p.id === pos.id) + 1;
+
           return (
             <div
               key={pos.id}
@@ -206,6 +212,14 @@ export function ActivePositionsTab({ positions, onRefresh }: ActivePositionsTabP
                       >
                         {pos.strategy_type}
                       </span>
+                      {hasMultiplePositions && (
+                        <span
+                          className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                          title="Posição simultânea ativa deste token prioritário"
+                        >
+                          ⭐ Pos {posIndex}/{sameTokenPositions.length}
+                        </span>
+                      )}
                     </div>
 
                     {address && (
