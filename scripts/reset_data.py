@@ -119,6 +119,76 @@ def reset_state_files(base_dir: str, initial_wallet: float = 110.0) -> None:
         print(f"✅ Resetado: {os.path.relpath(file_path, base_dir)}")
 
 
+def git_clean_and_protect_data(base_dir: str, do_pull: bool = False) -> None:
+    """
+    Descarta alterações locais do Git na pasta data/ para evitar conflito de merge no 'git pull',
+    opcionalmente executa o 'git pull origin main', e marca os arquivos como assume-unchanged.
+    """
+    try:
+        import subprocess
+
+        git_dir = os.path.join(base_dir, ".git")
+        if not os.path.exists(git_dir):
+            return
+
+        print("🧹 Verificando e limpando travas do Git na pasta data/...")
+        # 1. Descarta alterações locais em data/ para destravar o git pull
+        subprocess.run(
+            ["git", "checkout", "--", "data/"],
+            cwd=base_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        print("✅ Arquivos de data/ revertidos para o estado limpo do Git.")
+
+        # 2. Se a flag --pull for passada, executa git pull origin main
+        if do_pull:
+            print("🔄 Executando git pull origin main...")
+            pull_res = subprocess.run(
+                ["git", "pull", "origin", "main"],
+                cwd=base_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if pull_res.returncode == 0:
+                print("✅ Git pull concluído com sucesso:\n" + pull_res.stdout.strip())
+            else:
+                print("⚠️ Aviso no git pull:\n" + (pull_res.stderr or pull_res.stdout).strip())
+
+        # 3. Marca os arquivos rastreados em data/ com assume-unchanged para que o git
+        # nunca mais bloqueie pulls por conta de alterações operacionais do bot
+        tracked_candidates = [
+            "data/bot_status.json",
+            "data/bot_control.json",
+            "data/bot_config.json",
+            "data/incubator_tokens.json",
+            "data/waiting_tokens.json",
+            "data/paper_session.json",
+            "data/paper/bot_status.json",
+            "data/paper/bot_control.json",
+            "data/paper/bot_config.json",
+            "data/paper/priority_tokens.json",
+            "data/paper/waiting_tokens.json",
+            "data/paper/paper_session.json",
+            "data/live/bot_status.json",
+            "data/live/bot_control.json",
+        ]
+        for tf in tracked_candidates:
+            full_p = os.path.join(base_dir, tf)
+            if os.path.exists(full_p):
+                subprocess.run(
+                    ["git", "update-index", "--assume-unchanged", tf],
+                    cwd=base_dir,
+                    capture_output=True,
+                    check=False,
+                )
+        print("🛡️ Arquivos dinâmicos de data/ marcados com assume-unchanged (não bloquearão mais git pull).")
+    except Exception as exc:
+        print(f"ℹ️ Rotina Git ignorada: {exc}")
+
+
 def reset_logs(base_dir: str) -> None:
     """Zera o arquivo de logs para um início limpo."""
     log_path = os.path.join(base_dir, "logs", "vertex.log")
@@ -141,18 +211,33 @@ async def main() -> None:
         action="store_true",
         help="Não apagar o histórico de logs/vertex.log",
     )
+    parser.add_argument(
+        "--pull",
+        action="store_true",
+        help="Executa git checkout em data/ e git pull origin main antes de resetar",
+    )
     args = parser.parse_args()
 
     print("=" * 65)
     print("🚀 INICIANDO LIMPEZA COMPLETA DE DADOS DO VERTEX-BOT")
     print("=" * 65)
 
+    # 1. Limpa travas do Git e opcionalmente sincroniza código
+    git_clean_and_protect_data(BASE_DIR, do_pull=args.pull)
+
+    # 2. Reseta o banco de dados SQLite
     db_path = os.path.join(BASE_DIR, "data", "vertex_bot.db")
     await reset_database(db_path)
+
+    # 3. Zera os arquivos de estado JSON
     reset_state_files(BASE_DIR, initial_wallet=args.balance)
 
+    # 4. Trunca os logs (opcional)
     if not args.keep_logs:
         reset_logs(BASE_DIR)
+
+    # 5. Reaplica proteção assume-unchanged aos arquivos de estado recém-gerados
+    git_clean_and_protect_data(BASE_DIR, do_pull=False)
 
     print("=" * 65)
     print("✨ LIMPEZA CONCLUÍDA! O bot está pronto para iniciar do zero.")

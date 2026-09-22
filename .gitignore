@@ -43,10 +43,9 @@ data/*.db-shm
 *.db
 
 # Transient runtime state
-data/bot_status.json
-data/paper_session.json
-data/waiting_tokens.json
-data/bot_control.json
+data/*.json
+data/**/*.json
+!data/**/.gitkeep
 
 # Logs and telemetry
 logs/
