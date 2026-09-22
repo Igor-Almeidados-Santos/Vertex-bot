@@ -2,21 +2,19 @@
   "is_running": false,
   "is_paused": false,
   "mode": "PAPER",
-  "wallet_balance_usd": 98.94993831900851,
-  "initial_wallet_usd": 100.0,
-  "active_positions_count": 1,
+  "wallet_balance_usd": 110.0,
+  "initial_wallet_usd": 110.0,
+  "active_positions_count": 0,
   "slot_quotas": {
     "max_positions": 50,
     "priority_slots_max": 25,
-    "priority_slots_used": 1,
+    "priority_slots_used": 0,
     "new_tokens_slots_max": 25,
     "new_tokens_slots_used": 0,
-    "total_active": 1
+    "total_active": 0
   },
   "priority_slots_max": 25,
-  "priority_slots_used": 1,
+  "priority_slots_used": 0,
   "new_tokens_slots_max": 25,
-  "new_tokens_slots_used": 0,
-  "pid": 104921,
-  "timestamp": 1790095878.765927
+  "new_tokens_slots_used": 0
 }

@@ -1,5 +1,8 @@
 {
-  "session_start": "2026-09-22T16:35:39.508594+00:00",
-  "mode": "PAPER",
-  "initial_wallet_usd": 100.0
+  "initial_wallet_usd": 110.0,
+  "current_wallet_usd": 110.0,
+  "total_pnl_usd": 0.0,
+  "trades_count": 0,
+  "win_rate_pct": 0.0,
+  "is_paused": false
 }
