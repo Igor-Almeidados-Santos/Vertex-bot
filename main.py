@@ -2382,8 +2382,9 @@ class VertexBotOrchestrator:
             except Exception as exc:
                 logger.debug("Erro ao chamar release_token no scanner: %s", exc)
 
-        # 3. Autoriza reavaliação imediata no gestor de reentrada
-        self.reentry_manager.authorize_immediate_reanalysis(position.token_address)
+        # 3. Autoriza reavaliação imediata no gestor de reentrada (apenas se for vencedor)
+        if is_winner:
+            self.reentry_manager.authorize_immediate_reanalysis(position.token_address)
 
         # 4. Dispara imediatamente a reanálise do token fechado e a verificação de slots
         try:
@@ -2394,16 +2395,25 @@ class VertexBotOrchestrator:
                 if hasattr(self, "priority_pool") and self.priority_pool:
                     is_prio = self.priority_pool.is_priority(position.token_address)
 
-                if is_prio:
+                # Se o token encerrou vencedor (lucro ou break-even), autoriza reanálise imediata.
+                # Se encerrou no prejuízo/stop, respeita a quarentena protetiva para evitar repetições em cascata.
+                if is_winner:
+                    if is_prio:
+                        logger.info(
+                            "⭐ [TOKEN PRIORITÁRIO VENCEDOR] Reanalisando imediatamente token prioritário %s para reabertura...",
+                            position.token_address,
+                        )
+                    reanalysis_delay = 0.0 if self._is_test_env() else (0.1 if is_prio else 0.5)
+                    reanalyze_task = asyncio.create_task(
+                        self._reanalyze_and_reenter_token(position.token_address, mode=target_mode_str, delay_seconds=reanalysis_delay)
+                    )
+                    self._tasks.append(reanalyze_task)
+                else:
                     logger.info(
-                        "⭐ [TOKEN PRIORITÁRIO FECHADO] Reanalisando imediatamente token prioritário %s para reabertura...",
+                        "🛡️ [QUARENTENA PROTETIVA] Token %s encerrou em stop/prejuízo. Respeitando quarentena protetiva antes de reentrada.",
                         position.token_address,
                     )
-                reanalysis_delay = 0.0 if self._is_test_env() else (0.1 if is_prio else 0.5)
-                reanalyze_task = asyncio.create_task(
-                    self._reanalyze_and_reenter_token(position.token_address, mode=target_mode_str, delay_seconds=reanalysis_delay)
-                )
-                self._tasks.append(reanalyze_task)
+
                 # Preenchimento de slots com tokens da fila de espera e da lista de prioridades
                 fill_task = asyncio.create_task(self._try_fill_slots_from_waiting_queue())
                 self._tasks.append(fill_task)

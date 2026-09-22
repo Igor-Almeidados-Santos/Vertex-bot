@@ -18,7 +18,7 @@ interface TradeHistoryTabProps {
 }
 
 export function TradeHistoryTab({ positions }: TradeHistoryTabProps) {
-  const closedPositions = positions.filter((p) => p.status === "CLOSED");
+  const closedPositions = positions.filter((p) => p.status === "CLOSED" || p.status === "STOPPED");
   const [search, setSearch] = useState("");
   const [filterReason, setFilterReason] = useState<string>("ALL");
 

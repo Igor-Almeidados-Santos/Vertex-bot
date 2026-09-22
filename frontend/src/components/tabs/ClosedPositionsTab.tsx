@@ -11,7 +11,7 @@ interface ClosedPositionsTabProps {
 }
 
 export function ClosedPositionsTab({ positions }: ClosedPositionsTabProps) {
-  const closedPositions = positions.filter((p) => p.status === "CLOSED");
+  const closedPositions = positions.filter((p) => p.status === "CLOSED" || p.status === "STOPPED");
   const [search, setSearch] = useState("");
   const [filterStrategy, setFilterStrategy] = useState<"ALL" | "SCALP" | "SWING">("ALL");
 
@@ -161,9 +161,15 @@ export function ClosedPositionsTab({ positions }: ClosedPositionsTabProps) {
                     </td>
 
                     <td className="py-3 px-4">
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-profit/10 border border-profit/30 text-profit font-semibold">
-                        <CheckCircle2 className="w-3 h-3" /> 100% Vendida
-                      </span>
+                      {pos.status === "STOPPED" ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-loss/15 border border-loss/30 text-loss font-semibold">
+                          <XCircle className="w-3 h-3" /> Stop / Encerrada
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-profit/10 border border-profit/30 text-profit font-semibold">
+                          <CheckCircle2 className="w-3 h-3" /> 100% Vendida
+                        </span>
+                      )}
                     </td>
 
                     <td className="py-3 px-4 font-mono">

@@ -11,7 +11,7 @@ interface AnalyticsViewProps {
 
 export function AnalyticsView({ summary, positions }: AnalyticsViewProps) {
   const pnl = summary?.pnl;
-  const closedPositions = positions.filter((p) => p.status === "CLOSED");
+  const closedPositions = positions.filter((p) => p.status === "CLOSED" || p.status === "STOPPED");
 
   const totalTrades = pnl?.total_trades ?? closedPositions.length;
   const winRate = pnl?.win_rate_pct ?? 0;

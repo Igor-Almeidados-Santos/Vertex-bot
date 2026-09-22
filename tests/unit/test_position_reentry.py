@@ -251,3 +251,50 @@ async def test_handle_position_closed_rejects_reentry_if_criteria_not_met(tmp_pa
 
     await orch.stop()
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_handle_position_closed_respects_quarantine_on_loss(tmp_path: Any) -> None:
+    """Valida que posições encerradas em stop/prejuízo NÃO disparam reanálise imediata e respeitam quarentena."""
+    db_path = str(tmp_path / "reentry_quarantine.db")
+    db = DatabaseManager(db_path)
+    await db.initialize()
+
+    orch = VertexBotOrchestrator(db=db, start_enabled=True)
+    orch.is_running = True
+    orch.paper_enabled = True
+
+    token_addr = "TokenLoss111111111111111111111111111111111"
+    tok = TokenMetadata(
+        address=token_addr,
+        symbol="LOSS",
+        initial_liquidity_usd=Decimal("10000.0"),
+    )
+    await orch.tokens_repo.save_detected_token(tok)
+
+    pos_loss = PositionState(
+        id=10,
+        token_address=token_addr,
+        mode=ExecutionMode.PAPER,
+        entry_price=Decimal("1.0"),
+        initial_token_amount=Decimal("10.0"),
+        allocated_capital_usd=Decimal("10.0"),
+        trailing_stop_price=Decimal("0.8"),
+        realized_pnl_usd=Decimal("-0.05"),  # Prejuízo!
+        status=PositionStatus.STOPPED,
+    )
+
+    with patch.object(orch, "_reanalyze_and_reenter_token", new_callable=AsyncMock) as mock_reenter:
+        await orch._handle_position_closed(pos_loss)
+        await asyncio.sleep(0.05)
+        # Não deve disparar reanálise imediata
+        mock_reenter.assert_not_called()
+
+    # Confirma que o reentry_manager colocou o token em quarentena
+    can_reenter, reason = orch.reentry_manager.can_reenter(token_addr, current_price=Decimal("0.8"))
+    assert can_reenter is False
+    assert "Em período de descanso" in reason
+
+    await orch.stop()
+    await db.close()
+

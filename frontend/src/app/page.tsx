@@ -143,7 +143,7 @@ export default function DashboardPage() {
   };
 
   const activePositions = positions.filter((p) => p.status === "OPEN");
-  const closedPositions = positions.filter((p) => p.status === "CLOSED");
+  const closedPositions = positions.filter((p) => p.status === "CLOSED" || p.status === "STOPPED");
 
   return (
     <div className="min-h-screen flex bg-background text-gray-100">
