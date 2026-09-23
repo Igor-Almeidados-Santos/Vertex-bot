@@ -470,12 +470,17 @@ class VertexBotOrchestrator:
         logger.info("▶️ [MODO SIMULAÇÃO ATIVADO] Iniciando operações simuladas...")
         self.paper_enabled = True
         self.paper_paused = False
+        self.is_running = True
+        self.is_paused = False
+        self.execution_mode = "PAPER"
+        self.settings.EXECUTION_MODE = "PAPER"
         await self.reconcile_wallet_balance()
         try:
             await self.audit_and_purge_priority_pool("PAPER")
         except Exception as exc:
             logger.warning("Erro não-bloqueante na auditoria de prioridades em start_paper: %s", exc)
         self._write_heartbeat_sync(self.is_running)
+        asyncio.create_task(self._try_fill_slots_from_waiting_queue(mode="PAPER"))
 
     def pause_paper(self) -> None:
         """Pausa abertura de novas posições simuladas."""
@@ -523,11 +528,23 @@ class VertexBotOrchestrator:
         self.live_paused = False
         if self.execution_mode == "LIVE":
             self.is_paused = False
+        self.is_running = True
+        self.is_paused = False
+        self.execution_mode = "LIVE"
+        self.settings.EXECUTION_MODE = "LIVE"
+        self.settings.CONFIRM_LIVE_TRADING = True
+        self.live_engine.confirm_live_trading = True
+        try:
+            await self.live_engine.get_wallet_balance_usd()
+            await self.reconcile_wallet_balance()
+        except Exception as bal_err:
+            logger.warning("Erro ao consultar saldo real em start_live: %s", bal_err)
         try:
             await self.audit_and_purge_priority_pool("LIVE")
         except Exception as exc:
             logger.warning("Erro não-bloqueante na auditoria de prioridades em start_live: %s", exc)
         self._write_heartbeat_sync(self.is_running)
+        asyncio.create_task(self._try_fill_slots_from_waiting_queue(mode="LIVE"))
 
     def pause_live(self) -> None:
         """Pausa abertura de novas posições reais."""
@@ -855,6 +872,7 @@ class VertexBotOrchestrator:
             live_buy = Decimal(str(payload["live_buy_amount_usd"]))
             if live_buy > Decimal("0.0"):
                 self.settings.LIVE_BUY_AMOUNT_USD = live_buy
+                self.settings.MIN_TRADE_AMOUNT_USD = min(self.settings.MIN_TRADE_AMOUNT_USD, live_buy)
         if payload.get("live_max_concurrent_positions") is not None:
             self.settings.LIVE_MAX_CONCURRENT_POSITIONS = int(payload["live_max_concurrent_positions"])
         if payload.get("live_max_slippage_pct") is not None:
@@ -1272,7 +1290,16 @@ class VertexBotOrchestrator:
 
     async def _heartbeat_worker(self) -> None:
         """Emite periodicamente o estado de integridade (heartbeat) para o Dashboard avulso."""
+        last_balance_poll: float = 0.0
         while self.is_running:
+            try:
+                loop_now = asyncio.get_running_loop().time()
+                if self.live_enabled and (loop_now - last_balance_poll >= 15.0):
+                    last_balance_poll = loop_now
+                    if self.live_engine.has_connected_wallet():
+                        await self.live_engine.get_wallet_balance_usd()
+            except Exception:
+                pass
             await asyncio.to_thread(self._write_heartbeat_sync, True)
             await asyncio.sleep(1.5)
 
@@ -1687,24 +1714,31 @@ class VertexBotOrchestrator:
             return True
         return False
 
-    def _can_process_waiting_queue(self) -> tuple[bool, int, Decimal, int]:
+    def _can_process_waiting_queue(self, mode: str = "PAPER") -> tuple[bool, int, Decimal, int]:
         """Avalia condições prévias (status, slots e saldo) para consumo da fila de espera."""
         has_waiting = bool(self.waiting_tokens)
         has_priority = hasattr(self, "priority_pool") and self.priority_pool is not None and self.priority_pool.count() > 0
-        if (not has_waiting and not has_priority) or self.is_paused or not self.is_running:
+        target_mode = mode.upper()
+        mode_paused = self.live_paused if target_mode == "LIVE" else self.paper_paused
+        if (not has_waiting and not has_priority) or mode_paused or self.is_paused or not self.is_running:
             return False, 0, Decimal("0.0"), 0
 
-        active_count = len(self.position_tracker.active_positions)
-        max_positions = int(getattr(self.settings, "MAX_CONCURRENT_POSITIONS", 50))
+        tracker = self.live_tracker if target_mode == "LIVE" else self.paper_tracker
+        engine = self.live_engine if target_mode == "LIVE" else self.paper_engine
+
+        active_count = len(tracker.active_positions)
+        max_positions = int(getattr(self.settings, "LIVE_MAX_CONCURRENT_POSITIONS" if target_mode == "LIVE" else "MAX_CONCURRENT_POSITIONS", 50))
         if active_count >= max_positions:
             return False, 0, Decimal("0.0"), 0
 
-        configured_buy = Decimal(str(getattr(self.settings, "PAPER_BUY_AMOUNT_USD", "1.0")))
+        configured_buy = Decimal(str(getattr(self.settings, "LIVE_BUY_AMOUNT_USD" if target_mode == "LIVE" else "PAPER_BUY_AMOUNT_USD", "1.0")))
         min_trade = Decimal(str(getattr(self.settings, "MIN_TRADE_AMOUNT_USD", "1.0")))
         min_required = max(Decimal("0.05"), min(configured_buy, min_trade) - Decimal("0.05"))
 
-        if self.execution_engine.balance_usd < min_required:
+        if engine.balance_usd < min_required:
             return False, 0, Decimal("0.0"), 0
+
+        return True, 1, min_required, max_positions
 
         return True, 1, min_required, max_positions
 
@@ -1736,7 +1770,7 @@ class VertexBotOrchestrator:
             raw_event=raw_event,
         )
 
-    async def _try_fill_slots_from_waiting_queue(self) -> None:
+    async def _try_fill_slots_from_waiting_queue(self, mode: str | None = None) -> None:
         """Processa a fila de espera de tokens aprovados e abre posições se houver vagas e saldo."""
         if self._waiting_queue_lock is None:
             self._waiting_queue_lock = asyncio.Lock()
@@ -1745,168 +1779,186 @@ class VertexBotOrchestrator:
             return
 
         async with self._waiting_queue_lock:
-            can_run, _, min_required, max_positions = self._can_process_waiting_queue()
-            if not can_run:
-                return
-
-            strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
-            if strat_mode == "SWING_ONLY":
-                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0))
-            elif strat_mode == "SCALP_ONLY":
-                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
-                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_CONSOLIDATED", 87600.0))
+            if mode is not None:
+                target_modes = [mode.upper()]
             else:
-                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
-                max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_CONSOLIDATED", 87600.0))
-            now_utc = datetime.now(UTC)
+                target_modes = []
+                if self.live_enabled and not self.live_paused:
+                    target_modes.append("LIVE")
+                if self.paper_enabled and not self.paper_paused:
+                    target_modes.append("PAPER")
+                if not target_modes:
+                    target_modes = [self.execution_mode.upper()]
 
-            # Cotas 50/50: Metade para prioridades, metade para novos em análise
-            priority_cap = max(1, (max_positions + 1) // 2)
-            new_tokens_cap = max(1, max_positions - priority_cap)
+            for target_mode in target_modes:
+                tracker = self.live_tracker if target_mode == "LIVE" else self.paper_tracker
+                engine = self.live_engine if target_mode == "LIVE" else self.paper_engine
 
-            active_positions = list(self.position_tracker.active_positions.values())
-            priority_active_count = len([
-                p for p in active_positions
-                if hasattr(self, "priority_pool") and self.priority_pool and self.priority_pool.is_priority(p.token_address)
-            ])
-            new_active_count = len(active_positions) - priority_active_count
+                if target_mode == "LIVE" and hasattr(engine, "get_wallet_balance_usd"):
+                    if engine.balance_usd <= Decimal("0.0"):
+                        try:
+                            await engine.get_wallet_balance_usd()
+                        except Exception:
+                            pass
 
-            # 1. Primeiro drena tokens que estavam ativamente aguardando vaga na fila de espera
-            candidates = list(self.waiting_tokens.values())
-            addrs = [c["address"] for c in candidates]
-            live_prices = await self.price_feed.fetch_prices(addrs)
-
-            for item in candidates:
-                if not self.is_running or self.is_paused:
-                    break
-                if len(self.position_tracker.active_positions) >= max_positions:
-                    break
-                if self.execution_engine.balance_usd < min_required:
-                    break
-
-                addr = item["address"]
-                is_prio = False
-                if hasattr(self, "priority_pool") and self.priority_pool:
-                    is_prio = self.priority_pool.is_priority(addr)
-
-                # Verifica se há vaga na cota correspondente
-                if is_prio and priority_active_count >= priority_cap:
-                    continue
-                if not is_prio and new_active_count >= new_tokens_cap:
+                can_run, _, min_required, max_positions = self._can_process_waiting_queue(mode=target_mode)
+                if not can_run:
                     continue
 
-                if self._is_waiting_token_expired(item, max_age_hours, now_utc):
-                    self.waiting_tokens.pop(addr, None)
-                    self._save_waiting_tokens()
-                    continue
+                strat_mode = str(getattr(self.settings, "TRADING_STRATEGY_MODE", "DUAL")).upper()
+                if strat_mode == "SWING_ONLY":
+                    max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SWING", 6.0))
+                else:
+                    max_age_hours = float(getattr(self.settings, "MAX_TOKEN_AGE_HOURS_SCALP", 720.0))
+                now_utc = datetime.now(UTC)
 
-                price = live_prices.get(addr) or live_prices.get(addr.lower())
-                if self._is_waiting_token_dumped(item, price):
-                    self.waiting_tokens.pop(addr, None)
-                    self._save_waiting_tokens()
-                    continue
+                # Cotas 50/50: Metade para prioridades, metade para novos em análise
+                priority_cap = max(1, (max_positions + 1) // 2)
+                new_tokens_cap = max(1, max_positions - priority_cap)
 
-                token_meta = self._build_waiting_token_meta(item, price)
-                if hasattr(self, "chart_auditor") and self.chart_auditor is not None:
-                    is_chart_safe, chart_reason, chart_details = await self.chart_auditor.audit_token_pre_entry(token_meta)
-                    if not is_chart_safe:
-                        is_candles_insufficient = bool(chart_details.get("is_insufficient_candles")) if isinstance(chart_details, dict) else False
-                        if is_candles_insufficient and hasattr(self, "scanner") and hasattr(self.scanner, "incubate_token"):
-                            self.scanner.incubate_token(token_meta, reason="AGUARDANDO_3_VELAS_1H", wait_minutes=30.0)
-                            logger.info(
-                                "🍼 [FILA -> INCUBADORA] Token %s (%s) transferido para a incubadora aguardando 3 velas de 1h.",
-                                token_meta.symbol or addr[:8],
-                                addr,
-                            )
-                        else:
-                            logger.info(
-                                "📉 [FILA DE ESPERA] Token %s descartado por auditoria gráfica: %s",
-                                addr[:8],
-                                chart_reason,
-                            )
+                active_positions = list(tracker.active_positions.values())
+                priority_active_count = len([
+                    p for p in active_positions
+                    if hasattr(self, "priority_pool") and self.priority_pool and self.priority_pool.is_priority(p.token_address)
+                ])
+                new_active_count = len(active_positions) - priority_active_count
+
+                # 1. Primeiro drena tokens que estavam ativamente aguardando vaga na fila de espera
+                candidates = list(self.waiting_tokens.values())
+                addrs = [c["address"] for c in candidates]
+                live_prices = await self.price_feed.fetch_prices(addrs)
+
+                for item in candidates:
+                    if not self.is_running or (self.live_paused if target_mode == "LIVE" else self.paper_paused):
+                        break
+                    if len(tracker.active_positions) >= max_positions:
+                        break
+                    if engine.balance_usd < min_required:
+                        break
+
+                    addr = item["address"]
+                    is_prio = False
+                    if hasattr(self, "priority_pool") and self.priority_pool:
+                        is_prio = self.priority_pool.is_priority(addr)
+
+                    # Verifica se há vaga na cota correspondente
+                    if is_prio and priority_active_count >= priority_cap:
+                        continue
+                    if not is_prio and new_active_count >= new_tokens_cap:
+                        continue
+
+                    if self._is_waiting_token_expired(item, max_age_hours, now_utc):
                         self.waiting_tokens.pop(addr, None)
                         self._save_waiting_tokens()
                         continue
 
-                logger.info(
-                    "🚀 [FILA DE ESPERA] Slot liberado! Executando entrada para token aprovado %s (%s) [%s]",
-                    token_meta.symbol or addr[:8],
-                    addr,
-                    "PRIORIDADE" if is_prio else "NOVO",
-                )
-                await self._locked_evaluate_and_execute_entry(token_meta)
-                if is_prio:
-                    priority_active_count += 1
-                else:
-                    new_active_count += 1
-                self.waiting_tokens.pop(addr, None)
-                self._save_waiting_tokens()
+                    price = live_prices.get(addr) or live_prices.get(addr.lower())
+                    if self._is_waiting_token_dumped(item, price):
+                        self.waiting_tokens.pop(addr, None)
+                        self._save_waiting_tokens()
+                        continue
 
-            # 2. Precedência da Lista de Prioridades (Tokens Aprovados e Negociados que continuam vivos)
-            # Se ainda restarem slots disponíveis na cota de prioridade e capital, atende candidatos da Lista de Prioridades
-            if hasattr(self, "priority_pool") and self.priority_pool.count() > 0:
-                current_active_positions = list(self.position_tracker.active_positions.values())
-                active_counts_per_token: dict[str, int] = {}
-                for p in current_active_positions:
-                    active_counts_per_token[p.token_address] = active_counts_per_token.get(p.token_address, 0) + 1
-
-                priority_list = self.priority_pool.get_all_priority_tokens()
-                # Tokens prioritários podem ter até 2 posições simultâneas!
-                eligible_priority = [
-                    p for p in priority_list
-                    if active_counts_per_token.get(p["address"], 0) < 2
-                    and p.get("is_active_priority")
-                    and p.get("is_alive")
-                ]
-
-                if eligible_priority and priority_active_count < priority_cap:
-                    p_addrs = [p["address"] for p in eligible_priority]
-                    p_prices = await self.price_feed.fetch_prices(p_addrs)
-
-                    for p_item in eligible_priority:
-                        if not self.is_running or self.is_paused:
-                            break
-                        if len(self.position_tracker.active_positions) >= max_positions:
-                            break
-                        if priority_active_count >= priority_cap:
-                            break
-                        if self.execution_engine.balance_usd < min_required:
-                            break
-
-                        p_addr = p_item["address"]
-                        if active_counts_per_token.get(p_addr, 0) >= 2:
+                    token_meta = self._build_waiting_token_meta(item, price)
+                    if hasattr(self, "chart_auditor") and self.chart_auditor is not None:
+                        is_chart_safe, chart_reason, chart_details = await self.chart_auditor.audit_token_pre_entry(token_meta)
+                        if not is_chart_safe:
+                            is_candles_insufficient = bool(chart_details.get("is_insufficient_candles")) if isinstance(chart_details, dict) else False
+                            if is_candles_insufficient and hasattr(self, "scanner") and hasattr(self.scanner, "incubate_token"):
+                                self.scanner.incubate_token(token_meta, reason="AGUARDANDO_3_VELAS_1H", wait_minutes=30.0)
+                                logger.info(
+                                    "🍼 [FILA -> INCUBADORA] Token %s (%s) transferido para a incubadora aguardando 3 velas de 1h.",
+                                    token_meta.symbol or addr[:8],
+                                    addr,
+                                )
+                            else:
+                                logger.info(
+                                    "📉 [FILA DE ESPERA] Token %s descartado por auditoria gráfica: %s",
+                                    addr[:8],
+                                    chart_reason,
+                                )
+                            self.waiting_tokens.pop(addr, None)
+                            self._save_waiting_tokens()
                             continue
 
-                        p_price = p_prices.get(p_addr) or p_prices.get(p_addr.lower())
-                        if not p_price or p_price <= Decimal("0.0"):
-                            continue
+                    logger.info(
+                        "🚀 [FILA DE ESPERA (%s)] Slot liberado! Executando entrada para token aprovado %s (%s) [%s]",
+                        target_mode,
+                        token_meta.symbol or addr[:8],
+                        addr,
+                        "PRIORIDADE" if is_prio else "NOVO",
+                    )
+                    await self._locked_evaluate_and_execute_entry(token_meta, mode=target_mode)
+                    if is_prio:
+                        priority_active_count += 1
+                    else:
+                        new_active_count += 1
+                    self.waiting_tokens.pop(addr, None)
+                    self._save_waiting_tokens()
 
-                        # Atualiza saúde e verifica se o token "continua vivo"
-                        p_liq = Decimal(str(p_item.get("current_liquidity_usd", 0.0)))
-                        is_alive = self.priority_pool.update_token_health(p_addr, p_price, p_liq)
-                        if not is_alive:
-                            continue
+                # 2. Precedência da Lista de Prioridades (Tokens Aprovados e Negociados que continuam vivos)
+                if hasattr(self, "priority_pool") and self.priority_pool.count() > 0:
+                    current_active_positions = list(tracker.active_positions.values())
+                    active_counts_per_token: dict[str, int] = {}
+                    for p in current_active_positions:
+                        active_counts_per_token[p.token_address] = active_counts_per_token.get(p.token_address, 0) + 1
 
-                        # Confirma se está em ponto de reentrada (repique de suporte ou cool-off encerrado)
-                        can_reenter, _ = self.reentry_manager.can_reenter(
-                            token_address=p_addr,
-                            current_price=p_price,
-                            current_liquidity_usd=p_liq,
-                        )
-                        if can_reenter:
-                            curr_pos_for_tok = active_counts_per_token.get(p_addr, 0)
-                            logger.info(
-                                "⭐ [PRECEDÊNCIA DE EXECUÇÃO] Token prioritário %s (%s) selecionado (Posição %d/2)! [Slots Prioritários: %d/%d]",
-                                p_item.get("symbol"),
-                                p_addr[:8],
-                                curr_pos_for_tok + 1,
-                                priority_active_count + 1,
-                                priority_cap,
+                    priority_list = self.priority_pool.get_all_priority_tokens()
+                    eligible_priority = [
+                        p for p in priority_list
+                        if active_counts_per_token.get(p["address"], 0) < 2
+                        and p.get("is_active_priority")
+                        and p.get("is_alive")
+                    ]
+
+                    if eligible_priority and priority_active_count < priority_cap:
+                        p_addrs = [p["address"] for p in eligible_priority]
+                        p_prices = await self.price_feed.fetch_prices(p_addrs)
+
+                        for p_item in eligible_priority:
+                            if not self.is_running or (self.live_paused if target_mode == "LIVE" else self.paper_paused):
+                                break
+                            if len(tracker.active_positions) >= max_positions:
+                                break
+                            if priority_active_count >= priority_cap:
+                                break
+                            if engine.balance_usd < min_required:
+                                break
+
+                            p_addr = p_item["address"]
+                            if active_counts_per_token.get(p_addr, 0) >= 2:
+                                continue
+
+                            p_price = p_prices.get(p_addr) or p_prices.get(p_addr.lower())
+                            if not p_price or p_price <= Decimal("0.0"):
+                                continue
+
+                            # Atualiza saúde e verifica se o token "continua vivo"
+                            p_liq = Decimal(str(p_item.get("current_liquidity_usd", 0.0)))
+                            is_alive = self.priority_pool.update_token_health(p_addr, p_price, p_liq)
+                            if not is_alive:
+                                continue
+
+                            # Confirma se está em ponto de reentrada (repique de suporte ou cool-off encerrado)
+                            can_reenter, _ = self.reentry_manager.can_reenter(
+                                token_address=p_addr,
+                                current_price=p_price,
+                                current_liquidity_usd=p_liq,
                             )
-                            p_meta = self._build_waiting_token_meta(p_item, p_price)
-                            await self._evaluate_and_execute_entry(p_meta)
-                            priority_active_count += 1
-                            active_counts_per_token[p_addr] = curr_pos_for_tok + 1
+                            if can_reenter:
+                                curr_pos_for_tok = active_counts_per_token.get(p_addr, 0)
+                                logger.info(
+                                    "⭐ [PRECEDÊNCIA DE EXECUÇÃO (%s)] Token prioritário %s (%s) selecionado (Posição %d/2)! [Slots Prioritários: %d/%d]",
+                                    target_mode,
+                                    p_item.get("symbol"),
+                                    p_addr[:8],
+                                    curr_pos_for_tok + 1,
+                                    priority_active_count + 1,
+                                    priority_cap,
+                                )
+                                p_meta = self._build_waiting_token_meta(p_item, p_price)
+                                await self._evaluate_and_execute_entry(p_meta, mode=target_mode)
+                                priority_active_count += 1
+                                active_counts_per_token[p_addr] = curr_pos_for_tok + 1
 
     async def _evaluate_and_execute_entry(self, token: TokenMetadata, mode: str = "PAPER") -> None:
         """Avalia limites de slots, saldo e executa a compra do token aprovado com parâmetros dinâmicos."""
@@ -2236,6 +2288,14 @@ class VertexBotOrchestrator:
         required_slots = (1 if open_scalp else 0) + (1 if open_swing else 0)
         min_trade = Decimal(str(getattr(self.settings, "MIN_TRADE_AMOUNT_USD", "1.0")))
         configured_buy = Decimal(str(getattr(self.settings, "LIVE_BUY_AMOUNT_USD" if target_mode == "LIVE" else "PAPER_BUY_AMOUNT_USD", "1.0")))
+
+        # Se for LIVE, garante que o saldo mais recente on-chain está carregado
+        if target_mode == "LIVE" and hasattr(engine, "get_wallet_balance_usd"):
+            if engine.balance_usd <= Decimal("0.0"):
+                try:
+                    await engine.get_wallet_balance_usd()
+                except Exception as b_exc:
+                    logger.debug("Falha transitória ao buscar saldo on-chain na entrada: %s", b_exc)
         available_cash = engine.balance_usd
 
         if configured_buy and configured_buy > Decimal("0.0"):
@@ -2253,6 +2313,22 @@ class VertexBotOrchestrator:
 
         required_total_min = base_min_required * Decimal(required_slots)
         target_total_capital = base_buy_amount * Decimal(required_slots)
+
+        # Se for DUAL (2 pernas) mas o caixa cobrir apenas 1 perna, abre a perna Scalp para não travar a oportunidade
+        if required_slots == 2 and (available_cash < required_total_min or available_cash < target_total_capital):
+            if available_cash >= base_buy_amount:
+                logger.info(
+                    "💡 [SALDO PARCIAL (%s)] Caixa disponível ($%.2f) cobre 1 perna ($%.2f), mas não 2 pernas ($%.2f). Executando SCALP.",
+                    target_mode,
+                    available_cash,
+                    base_buy_amount,
+                    target_total_capital,
+                )
+                open_scalp = True
+                open_swing = False
+                required_slots = 1
+                required_total_min = base_min_required
+                target_total_capital = base_buy_amount
 
         if available_cash < required_total_min or available_cash < target_total_capital:
             waiting_reason = "AGUARDANDO_SALDO"
@@ -2600,9 +2676,13 @@ class VertexBotOrchestrator:
         if self.is_paused:
             return
 
-        active_count = len(self.position_tracker.active_positions)
-        available_cash = self.execution_engine.balance_usd
-        configured_buy = Decimal(str(getattr(self.settings, "PAPER_BUY_AMOUNT_USD", "1.0")))
+        is_live = (self.execution_mode == "LIVE")
+        tracker = self.live_tracker if is_live else self.paper_tracker
+        engine = self.live_engine if is_live else self.paper_engine
+
+        active_count = len(tracker.active_positions)
+        available_cash = engine.balance_usd
+        configured_buy = Decimal(str(getattr(self.settings, "LIVE_BUY_AMOUNT_USD" if is_live else "PAPER_BUY_AMOUNT_USD", "1.0")))
         if configured_buy and configured_buy > Decimal("0.0"):
             min_required = max(Decimal("0.05"), min(configured_buy, min_trade) - Decimal("0.05"))
         else:
@@ -2611,7 +2691,7 @@ class VertexBotOrchestrator:
         if active_count >= max_positions or available_cash < min_required:
             return
 
-        active_addresses = [p.token_address for p in self.position_tracker.active_positions.values()]
+        active_addresses = [p.token_address for p in tracker.active_positions.values()]
         candidates = await self.tokens_repo.get_approved_watchlist_candidates(
             exclude_addresses=active_addresses,
             limit=20,
@@ -2630,9 +2710,9 @@ class VertexBotOrchestrator:
         for cand in eligible:
             if not self.is_running or self.is_paused:
                 break
-            if len(self.position_tracker.active_positions) >= max_positions:
+            if len(tracker.active_positions) >= max_positions:
                 break
-            if self.execution_engine.balance_usd < min_required:
+            if engine.balance_usd < min_required:
                 break
 
             await self._try_enqueue_watchlist_candidate(

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from solders.keypair import Keypair  # type: ignore[import-untyped]
+from solders.keypair import Keypair
 
 from src.config.settings import update_env_file
 from src.dashboard.server import create_dashboard_app
@@ -139,8 +139,14 @@ async def test_dashboard_wallet_and_start_env_sync(tmp_path: Path, monkeypatch: 
         def resume(self) -> None:
             pass
 
+    # Mock balance query to avoid external RPC latency during test
+    async def mock_get_wallet_balance_usd() -> Decimal:
+        return Decimal("25.0")
+
+    monkeypatch.setattr(live_engine, "get_wallet_balance_usd", mock_get_wallet_balance_usd)
+
     orch = MockSyncOrchestrator()
-    app = create_dashboard_app(db=db, orchestrator=orch)  # type: ignore[arg-type]
+    app = create_dashboard_app(db=db, orchestrator=orch)
     server = TestServer(app)
     client = TestClient(server)
     await client.start_server()
@@ -150,6 +156,7 @@ async def test_dashboard_wallet_and_start_env_sync(tmp_path: Path, monkeypatch: 
         kp = Keypair()
         priv_sol = str(kp)
         resp = await client.post("/api/wallet/connect", json={"chain": "solana", "private_key": priv_sol})
+        resp = await client.post("/api/wallets/connect", json={"chain": "solana", "private_key": priv_sol})
         assert resp.status == 200
         env_content = env_file.read_text(encoding="utf-8")
         assert f'SOLANA_PRIVATE_KEY_BASE58="{priv_sol}"' in env_content
@@ -158,6 +165,7 @@ async def test_dashboard_wallet_and_start_env_sync(tmp_path: Path, monkeypatch: 
         # 2. Conectar carteira EVM
         evm_key = "0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f361322"
         resp_evm = await client.post("/api/wallet/connect", json={"chain": "base", "private_key": evm_key})
+        resp_evm = await client.post("/api/wallets/connect", json={"chain": "base", "private_key": evm_key})
         assert resp_evm.status == 200
         env_content = env_file.read_text(encoding="utf-8")
         assert f'EVM_PRIVATE_KEY="{evm_key}"' in env_content
@@ -182,6 +190,7 @@ async def test_dashboard_wallet_and_start_env_sync(tmp_path: Path, monkeypatch: 
 
         # 5. Desconectar Solana
         resp_disc = await client.post("/api/wallet/disconnect", json={"chain": "solana"})
+        resp_disc = await client.post("/api/wallets/disconnect", json={"chain": "solana"})
         assert resp_disc.status == 200
         env_content = env_file.read_text(encoding="utf-8")
         assert 'SOLANA_PRIVATE_KEY_BASE58=""' in env_content
@@ -195,6 +204,7 @@ async def test_dashboard_wallet_and_start_env_sync(tmp_path: Path, monkeypatch: 
         assert 'EVM_WALLET_PRIVATE_KEY=""' in env_content
 
     finally:
-        await client.close_server()
+        await client.close()
+        await server.close()
         await db.close()
 

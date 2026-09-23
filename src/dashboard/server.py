@@ -1472,6 +1472,20 @@ class DashboardServer:
                     except (ValueError, TypeError):
                         pass
 
+            # Persiste no .env se houver alterações de parâmetros compatíveis
+            env_updates: dict[str, str] = {}
+            if payload.get("live_buy_amount_usd") is not None:
+                env_updates["LIVE_BUY_AMOUNT_USD"] = str(payload["live_buy_amount_usd"])
+            if payload.get("paper_buy_amount_usd") is not None:
+                env_updates["PAPER_BUY_AMOUNT_USD"] = str(payload["paper_buy_amount_usd"])
+            if payload.get("live_max_concurrent_positions") is not None:
+                env_updates["LIVE_MAX_CONCURRENT_POSITIONS"] = str(payload["live_max_concurrent_positions"])
+            if payload.get("max_concurrent_positions") is not None:
+                env_updates["MAX_CONCURRENT_POSITIONS"] = str(payload["max_concurrent_positions"])
+            if env_updates:
+                update_env_file(env_updates)
+                logger.info("💾 [CONFIG] Parâmetros de execução persistidos no .env: %s", list(env_updates.keys()))
+
             if self.orchestrator and getattr(self.orchestrator, "execution_mode", "PAPER").lower() == mode:
                 updated = self.orchestrator.update_dynamic_config(payload)
             else:
@@ -1624,8 +1638,11 @@ def create_dashboard_app(db: DatabaseManager, orchestrator: Any | None = None) -
     # Rotas de carteiras reais (LIVE)
     app.router.add_get("/api/wallets", server.handle_get_wallets)
     app.router.add_post("/api/wallets/connect", server.handle_connect_wallet)
+    app.router.add_post("/api/wallet/connect", server.handle_connect_wallet)
     app.router.add_post("/api/wallets/disconnect", server.handle_disconnect_wallet)
+    app.router.add_post("/api/wallet/disconnect", server.handle_disconnect_wallet)
     app.router.add_post("/api/wallets/transfer", server.handle_transfer_wallet)
+    app.router.add_post("/api/wallet/transfer", server.handle_transfer_wallet)
 
     # Rotas de controle operacional e configurações
     app.router.add_get("/api/bot/status", server.handle_bot_status)
