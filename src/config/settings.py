@@ -169,6 +169,7 @@ class Settings(BaseSettings):
     LIVE_MAX_CONCURRENT_POSITIONS: int = 3
     LIVE_MAX_SLIPPAGE_PCT: Decimal = Decimal("1.5")
     LIVE_JITO_TIP_LAMPORTS: int = 50000
+    EVM_MIN_GAS_RESERVE_USD: Decimal = Decimal("5.0")
 
     @staticmethod
     def get_dir(mode: str) -> Path:
@@ -281,3 +282,54 @@ def get_settings(env_path: str = ".env") -> Settings:
         settings.EVM_PRIVATE_KEY = settings.EVM_WALLET_PRIVATE_KEY
 
     return settings
+
+
+def update_env_file(updates: dict[str, str], filepath: str = ".env") -> bool:
+    """
+    Atualiza variáveis de ambiente diretamente no arquivo .env preservando comentários e formatação.
+    Sincroniza os valores no os.environ imediatamente em tempo de execução.
+    """
+    try:
+        lines: list[str] = []
+        if os.path.exists(filepath):
+            with open(filepath, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+        updated_keys: set[str] = set()
+        new_lines: list[str] = []
+
+        for line in lines:
+            stripped = line.strip()
+            matched = False
+            for key, val in updates.items():
+                clean_val = str(val).strip()
+                if stripped.startswith(f"{key}=") or stripped.startswith(f"# {key}="):
+                    if not clean_val:
+                        new_lines.append(f"{key}=\"\"\n")
+                    else:
+                        new_lines.append(f"{key}=\"{clean_val}\"\n")
+                    updated_keys.add(key)
+                    matched = True
+                    os.environ[key] = clean_val
+                    break
+            if not matched:
+                new_lines.append(line)
+
+        remaining = set(updates.keys()) - updated_keys
+        if remaining:
+            if new_lines and not new_lines[-1].endswith("\n"):
+                new_lines.append("\n")
+            for key in sorted(remaining):
+                clean_val = str(updates[key]).strip()
+                new_lines.append(f"{key}=\"{clean_val}\"\n")
+                os.environ[key] = clean_val
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+        return True
+    except Exception as exc:
+        import logging
+        logging.getLogger("vertex.config").error("Falha ao persistir alterações no .env: %s", exc)
+        return False
+

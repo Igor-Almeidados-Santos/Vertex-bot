@@ -16,6 +16,7 @@ from typing import Any
 from aiohttp import web
 from aiohttp.typedefs import Handler
 
+from src.config.settings import update_env_file
 from src.database.connection import DatabaseManager
 from src.database.repository import OrdersRepository, PositionsRepository, TokensRepository
 from src.utils.logger import setup_logger
@@ -122,11 +123,26 @@ class DashboardServer:
             from src.config.settings import get_settings
             from src.engine.live import LiveExecutionEngine
             settings = get_settings()
+            evm_rpcs = {
+                "base": settings.BASE_RPC_URL,
+                "arbitrum": settings.ARBITRUM_RPC_URL,
+                "bsc": settings.BSC_RPC_URL,
+                "polygon": settings.POLYGON_RPC_URL,
+                "ethereum": settings.ETHEREUM_RPC_URL,
+                "avalanche": settings.AVALANCHE_RPC_URL,
+                "optimism": settings.OPTIMISM_RPC_URL,
+                "blast": settings.BLAST_RPC_URL,
+            }
             self._fallback_live_engine = LiveExecutionEngine(
                 positions_repo=self.positions_repo,
                 orders_repo=self.orders_repo,
+                tokens_repo=self.tokens_repo,
                 solana_rpc_url=settings.PRIMARY_RPC_HTTP_URL,
+                solana_private_key_base58=settings.SOLANA_PRIVATE_KEY_BASE58 or settings.WALLET_PRIVATE_KEY_BASE58,
+                evm_rpc_urls=evm_rpcs,
+                evm_private_key=settings.EVM_PRIVATE_KEY or settings.EVM_WALLET_PRIVATE_KEY,
                 confirm_live_trading=settings.CONFIRM_LIVE_TRADING,
+                evm_min_gas_reserve_usd=settings.EVM_MIN_GAS_RESERVE_USD,
             )
         return self._fallback_live_engine
 
@@ -981,18 +997,28 @@ class DashboardServer:
                 success, pubkey, bal_usd, err = await engine.connect_solana_wallet(private_key)
                 if not success:
                     return web.json_response({"status": "error", "message": err or "Chave privada Solana inválida."}, status=400)
+                update_env_file({
+                    "SOLANA_PRIVATE_KEY_BASE58": private_key,
+                    "WALLET_PRIVATE_KEY_BASE58": private_key,
+                })
+                logger.info("💾 [CONFIG] Chave Solana persistida automaticamente no .env")
                 return web.json_response({
                     "status": "success",
-                    "message": f"Carteira Solana conectada com sucesso ({pubkey[:4]}...{pubkey[-4:]})!",
+                    "message": f"Carteira Solana conectada e salva no .env ({pubkey[:4]}...{pubkey[-4:]})!",
                     "data": {"chain": "solana", "address": pubkey, "balance_usd": float(bal_usd)},
                 })
-            elif chain in ("evm", "arbitrum", "base", "ethereum"):
+            elif chain in ("evm", "arbitrum", "base", "ethereum", "bsc", "polygon"):
                 success, addr, bal_usd, err = await engine.connect_evm_wallet(private_key)
                 if not success:
                     return web.json_response({"status": "error", "message": err or "Chave privada EVM inválida."}, status=400)
+                update_env_file({
+                    "EVM_PRIVATE_KEY": private_key,
+                    "EVM_WALLET_PRIVATE_KEY": private_key,
+                })
+                logger.info("💾 [CONFIG] Chave EVM persistida automaticamente no .env")
                 return web.json_response({
                     "status": "success",
-                    "message": f"Carteira EVM conectada com sucesso ({addr[:6]}...{addr[-4:]})!",
+                    "message": f"Carteira EVM conectada e salva no .env ({addr[:6]}...{addr[-4:]})!",
                     "data": {"chain": "evm", "address": addr, "balance_usd": float(bal_usd)},
                 })
             else:
@@ -1003,7 +1029,7 @@ class DashboardServer:
 
 
     async def handle_disconnect_wallet(self, request: web.Request) -> web.Response:
-        """Desconecta a carteira da rede especificada limpando da memória."""
+        """Desconecta a carteira da rede especificada limpando da memória e do .env."""
         try:
             body = await request.json()
         except Exception:
@@ -1013,10 +1039,24 @@ class DashboardServer:
             self.orchestrator.live_engine.disconnect_wallet(chain)
         if self._fallback_live_engine is not None:
             self._fallback_live_engine.disconnect_wallet(chain)
-        return web.json_response({"status": "success", "message": f"Carteira {chain.upper()} desconectada."})
+
+        if chain == "solana":
+            update_env_file({
+                "SOLANA_PRIVATE_KEY_BASE58": "",
+                "WALLET_PRIVATE_KEY_BASE58": "",
+            })
+            logger.info("💾 [CONFIG] Chave Solana removida do .env")
+        elif chain in ("evm", "arbitrum", "base", "ethereum", "bsc", "polygon"):
+            update_env_file({
+                "EVM_PRIVATE_KEY": "",
+                "EVM_WALLET_PRIVATE_KEY": "",
+            })
+            logger.info("💾 [CONFIG] Chave EVM removida do .env")
+
+        return web.json_response({"status": "success", "message": f"Carteira {chain.upper()} desconectada e limpa do .env."})
 
     async def handle_transfer_wallet(self, request: web.Request) -> web.Response:
-        """Processa transferência ou saque de fundos (SOL) on-chain."""
+        """Processa transferência ou saque de fundos (SOL e EVM) on-chain."""
         try:
             try:
                 body = await request.json()
@@ -1024,38 +1064,63 @@ class DashboardServer:
                 return web.json_response({"status": "error", "message": "Payload JSON inválido."}, status=400)
 
             chain = str(body.get("chain", "solana")).lower().strip()
-            if chain != "solana":
-                return web.json_response({"status": "error", "message": f"Transferência para rede '{chain}' não suportada atualmente."}, status=400)
-
             recipient = str(body.get("recipient_address", "")).strip()
             if not recipient:
                 return web.json_response({"status": "error", "message": "Endereço destinatário não informado."}, status=400)
 
             send_all = bool(body.get("send_all", False))
-            raw_amount = body.get("amount_sol")
-            amount_sol = Decimal(str(raw_amount)) if (raw_amount is not None and str(raw_amount).strip() != "") else None
             private_key = str(body.get("private_key", "")).strip() or None
-
             engine = self._get_live_engine()
-            success, result_msg, solscan_url = await engine.transfer_sol(
-                recipient_address=recipient,
-                amount_sol=amount_sol,
-                send_all=send_all,
-                private_key=private_key,
-            )
 
-            if not success:
-                return web.json_response({"status": "error", "message": result_msg}, status=400)
+            if chain == "solana":
+                raw_amount = body.get("amount_sol") or body.get("amount")
+                amount_sol = Decimal(str(raw_amount)) if (raw_amount is not None and str(raw_amount).strip() != "") else None
+                success, result_msg, solscan_url = await engine.transfer_sol(
+                    recipient_address=recipient,
+                    amount_sol=amount_sol,
+                    send_all=send_all,
+                    private_key=private_key,
+                )
+                if not success:
+                    return web.json_response({"status": "error", "message": result_msg}, status=400)
 
-            return web.json_response({
-                "status": "success",
-                "message": "Transferência realizada com sucesso!",
-                "data": {
-                    "tx_hash": result_msg,
-                    "solscan_url": solscan_url,
-                    "recipient": recipient,
-                },
-            })
+                return web.json_response({
+                    "status": "success",
+                    "message": "Transferência Solana realizada com sucesso!",
+                    "data": {
+                        "tx_hash": result_msg,
+                        "solscan_url": solscan_url,
+                        "recipient": recipient,
+                    },
+                })
+
+            elif chain in ("evm", "base", "arbitrum", "bsc", "polygon", "ethereum"):
+                target_chain = "base" if chain == "evm" else chain
+                raw_amount = body.get("amount_native") or body.get("amount_eth") or body.get("amount")
+                amount_native = Decimal(str(raw_amount)) if (raw_amount is not None and str(raw_amount).strip() != "") else None
+                success, result_msg, explorer_url = await engine.transfer_evm(
+                    chain=target_chain,
+                    recipient_address=recipient,
+                    amount_native=amount_native,
+                    send_all=send_all,
+                    private_key=private_key,
+                )
+                if not success:
+                    return web.json_response({"status": "error", "message": result_msg}, status=400)
+
+                return web.json_response({
+                    "status": "success",
+                    "message": f"Transferência {target_chain.upper()} realizada com sucesso!",
+                    "data": {
+                        "tx_hash": result_msg,
+                        "solscan_url": explorer_url,
+                        "explorer_url": explorer_url,
+                        "recipient": recipient,
+                    },
+                })
+
+            else:
+                return web.json_response({"status": "error", "message": f"Transferência para rede '{chain}' não suportada atualmente."}, status=400)
         except Exception as exc:
             logger.error("Erro no processamento de transferência: %s", exc)
             return web.json_response({"status": "error", "message": f"Erro interno na transferência: {exc}"}, status=500)
@@ -1153,6 +1218,17 @@ class DashboardServer:
                         "status": "error",
                         "message": "Nenhuma carteira real conectada. Conecte ao menos uma carteira Solana ou EVM antes de iniciar operações reais.",
                     }, status=400)
+                update_env_file({
+                    "EXECUTION_MODE": "LIVE",
+                    "CONFIRM_LIVE_TRADING": "true",
+                })
+                if hasattr(self.orchestrator, "settings"):
+                    self.orchestrator.settings.EXECUTION_MODE = "LIVE"
+                    self.orchestrator.settings.CONFIRM_LIVE_TRADING = True
+                if hasattr(self.orchestrator, "live_engine") and self.orchestrator.live_engine:
+                    self.orchestrator.live_engine.confirm_live_trading = True
+                logger.info("💾 [CONFIG] Modo LIVE e CONFIRM_LIVE_TRADING persistidos no .env")
+
                 if hasattr(self.orchestrator, "start_live"):
                     await self.orchestrator.start_live()
                 elif hasattr(self.orchestrator, "start"):
@@ -1164,6 +1240,13 @@ class DashboardServer:
                     "mode": "LIVE",
                 })
             else:
+                update_env_file({
+                    "EXECUTION_MODE": "PAPER",
+                })
+                if hasattr(self.orchestrator, "settings"):
+                    self.orchestrator.settings.EXECUTION_MODE = "PAPER"
+                logger.info("💾 [CONFIG] Modo PAPER persistido no .env")
+
                 if hasattr(self.orchestrator, "start_paper"):
                     await self.orchestrator.start_paper()
                 elif hasattr(self.orchestrator, "start"):
@@ -1189,8 +1272,17 @@ class DashboardServer:
                     "status": "error",
                     "message": "Nenhuma carteira real conectada. Conecte ao menos uma carteira com saldo antes de iniciar.",
                 }, status=400)
+            update_env_file({
+                "EXECUTION_MODE": "LIVE",
+                "CONFIRM_LIVE_TRADING": "true",
+            })
+            logger.info("💾 [CONFIG] Modo LIVE e CONFIRM_LIVE_TRADING persistidos no .env (IPC)")
             self._write_ipc_command("start", mode="live")
         else:
+            update_env_file({
+                "EXECUTION_MODE": "PAPER",
+            })
+            logger.info("💾 [CONFIG] Modo PAPER persistido no .env (IPC)")
             self._write_ipc_command("start", mode="paper")
 
         # Modo desacoplado: verifica se já está ativo via status
@@ -1208,29 +1300,7 @@ class DashboardServer:
             "mode": mode.upper(),
         })
 
-        try:
-            out_file = await asyncio.to_thread(_open_runtime_log_file)
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "main.py",
-                "--mode",
-                mode,
-                stdout=out_file,
-                stderr=out_file,
-            )
-            DashboardServer._bot_subprocess = proc
-            logger.info("🚀 [BOT EXECUTADO NOVAMENTE] Subprocesso iniciado (PID: %d, Modo: %s). Logs em data/bot_runtime.log", proc.pid, mode.upper())
-            return web.json_response({
-                "status": "success",
-                "message": f"Bot ({mode.upper()}) executado com sucesso (PID: {proc.pid})!",
-                "is_running": True,
-            })
-        except Exception as exc:
-            logger.error("Falha ao iniciar processo do bot: %s", exc)
-            return web.json_response({"status": "error", "message": f"Erro ao iniciar o bot: {exc}"}, status=500)
-
     async def handle_bot_pause(self, request: web.Request) -> web.Response:
-        """Pausa a abertura de novas posições pelo bot."""
         """Pausa abertura de novas posições no modo especificado."""
         mode = request.query.get("mode", "paper").lower()
         if self.orchestrator and getattr(self.orchestrator, "execution_mode", "PAPER").lower() == mode:
@@ -1245,10 +1315,8 @@ class DashboardServer:
         else:
             self._write_ipc_command("pause", mode=mode)
         return web.json_response({"status": "success", "message": f"Bot ({mode.upper()}) pausado com sucesso.", "is_paused": True, "mode": mode.upper()})
-        return web.json_response({"status": "success", "message": f"Operações ({mode.upper()}) pausadas com sucesso.", "is_paused": True, "mode": mode.upper()})
 
     async def handle_bot_resume(self, request: web.Request) -> web.Response:
-        """Retoma as operações normais do bot."""
         """Retoma as operações normais do bot no modo especificado."""
         mode = request.query.get("mode", "paper").lower()
         if self.orchestrator and getattr(self.orchestrator, "execution_mode", "PAPER").lower() == mode:
@@ -1263,7 +1331,6 @@ class DashboardServer:
         else:
             self._write_ipc_command("resume", mode=mode)
         return web.json_response({"status": "success", "message": f"Bot ({mode.upper()}) retomado com sucesso.", "is_paused": False, "mode": mode.upper()})
-        return web.json_response({"status": "success", "message": f"Operações ({mode.upper()}) retomadas com sucesso.", "is_paused": False, "mode": mode.upper()})
 
     async def handle_bot_restart(self, request: web.Request) -> web.Response:
         """Reinicia a simulação: limpa posições/ordens, zera sequência para #1 e reinicia sessão. Apenas para PAPER."""

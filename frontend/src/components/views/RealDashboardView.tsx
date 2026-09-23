@@ -696,6 +696,8 @@ export function RealDashboardView() {
           {/* EVM Card */}
           {(() => {
             const evmWallet = wallets.find((w) => w.chain.toLowerCase() === "evm" || w.chain.toLowerCase() === "arbitrum");
+            const baseWallet = wallets.find((w) => w.chain.toLowerCase() === "base");
+            const arbWallet = wallets.find((w) => w.chain.toLowerCase() === "arbitrum");
             const isConn = Boolean(evmWallet?.is_connected);
             const addr = evmWallet?.address || "";
             return (
@@ -723,22 +725,49 @@ export function RealDashboardView() {
                           {copiedAddress === addr ? <Check className="w-3.5 h-3.5 text-profit" /> : <Copy className="w-3.5 h-3.5" />}
                         </button>
                         <a
+                          href={`https://basescan.org/address/${addr}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-1.5 py-0.5 rounded hover:bg-surface-hover text-blue-400 hover:text-blue-300 font-mono text-[10px] border border-blue-500/20 flex items-center gap-1"
+                          title="Ver no Basescan"
+                        >
+                          <span>Base</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                        <a
                           href={`https://arbiscan.io/address/${addr}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="p-1 rounded hover:bg-surface-hover text-gray-400 hover:text-white"
+                          className="px-1.5 py-0.5 rounded hover:bg-surface-hover text-cyan-400 hover:text-cyan-300 font-mono text-[10px] border border-cyan-500/20 flex items-center gap-1"
                           title="Ver no Arbiscan"
                         >
-                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>Arbi</span>
+                          <ExternalLink className="w-3 h-3" />
                         </a>
                       </div>
                     </div>
-                    <div className="flex items-baseline justify-between pt-1 border-t border-border/50">
-                      <span className="text-[11px] text-gray-400">Saldo On-Chain</span>
-                      <div className="text-right font-mono">
-                        <span className="text-sm font-bold text-white">{evmWallet?.balance_native ?? 0} ETH</span>
-                        <span className="text-xs text-gray-400 block">{formatUSD(evmWallet?.balance_usd ?? 0)}</span>
+                    <div className="pt-1 border-t border-border/50 space-y-1.5">
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[11px] text-gray-400">Saldo Total EVM</span>
+                        <div className="text-right font-mono">
+                          <span className="text-sm font-bold text-white">{evmWallet?.balance_native ?? 0} ETH</span>
+                          <span className="text-xs text-gray-400 block">{formatUSD(evmWallet?.balance_usd ?? 0)}</span>
+                        </div>
                       </div>
+                      {(baseWallet || arbWallet) && (
+                        <div className="grid grid-cols-2 gap-1.5 pt-1 text-[10px] font-mono border-t border-border/30">
+                          <div className="bg-surface/50 p-1.5 rounded border border-border/30 flex flex-col justify-between">
+                            <span className="text-blue-400 font-semibold">Base:</span>
+                            <span className="text-white font-bold">{baseWallet?.balance_native ?? 0} ETH</span>
+                            <span className="text-gray-400">{formatUSD(baseWallet?.balance_usd ?? 0)}</span>
+                          </div>
+                          <div className="bg-surface/50 p-1.5 rounded border border-border/30 flex flex-col justify-between">
+                            <span className="text-cyan-400 font-semibold">Arbitrum:</span>
+                            <span className="text-white font-bold">{arbWallet?.balance_native ?? 0} ETH</span>
+                            <span className="text-gray-400">{formatUSD(arbWallet?.balance_usd ?? 0)}</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <button
                       onClick={() => handleDisconnectWallet("evm")}

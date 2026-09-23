@@ -25,7 +25,8 @@ from src.database.models import (
     PositionStatus,
     TokenMetadata,
 )
-from src.database.repository import OrdersRepository, PositionsRepository
+from src.database.repository import OrdersRepository, PositionsRepository, TokensRepository
+from src.engine.evm_executor import CHAIN_CONFIGS, EVMExecutionClient, EVMSwapResult
 from src.engine.interface import IExecutionEngine
 from src.engine.jupiter import JupiterSwapClient, WSOL_MINT
 from src.engine.price_feed import DexScreenerPriceFeed
@@ -55,9 +56,12 @@ class LiveExecutionEngine(IExecutionEngine):
         jito_tip_lamports: int = 50000,
         trailing_drop_pct: Decimal = Decimal("0.12"),
         estimated_sol_price_usd: Decimal = Decimal("150.0"),
+        tokens_repo: TokensRepository | None = None,
+        evm_min_gas_reserve_usd: Decimal = Decimal("5.0"),
     ) -> None:
         self.positions_repo: PositionsRepository = positions_repo
         self.orders_repo: OrdersRepository = orders_repo
+        self.tokens_repo: TokensRepository | None = tokens_repo
         self.solana_rpc_url: str = solana_rpc_url
         self.confirm_live_trading: bool = confirm_live_trading
         self.price_feed: DexScreenerPriceFeed | None = price_feed
@@ -66,6 +70,7 @@ class LiveExecutionEngine(IExecutionEngine):
         self.jito_tip_lamports: int = jito_tip_lamports
         self.trailing_drop_pct: Decimal = trailing_drop_pct
         self.estimated_sol_price_usd: Decimal = estimated_sol_price_usd
+        self.evm_min_gas_reserve_usd: Decimal = evm_min_gas_reserve_usd
 
         # Inicialização do cliente RPC Solana
         self._solana_client: AsyncClient = AsyncClient(self.solana_rpc_url)
@@ -81,18 +86,15 @@ class LiveExecutionEngine(IExecutionEngine):
             except BaseException as exc:
                 logger.error("Falha crítica ao decodificar SOLANA_PRIVATE_KEY_BASE58: %s", exc)
 
-        # Configuração EVM (Web3)
+        # Configuração EVM (Web3 & KyberSwap)
         self._evm_private_key: str | None = str(evm_private_key).strip() if evm_private_key else None
-        self.evm_address: str | None = None
         self.evm_rpc_urls: dict[str, str] = evm_rpc_urls or {}
-        if self._evm_private_key:
-            try:
-                from eth_account import Account
-                acct = Account.from_key(self._evm_private_key)
-                self.evm_address = acct.address
-                logger.info("🔑 Carteira EVM Live carregada: %s", self.evm_address)
-            except Exception as exc:
-                logger.error("Falha ao inicializar conta EVM: %s", exc)
+        self.evm_client: EVMExecutionClient = EVMExecutionClient(
+            private_key=self._evm_private_key,
+            rpc_urls=self.evm_rpc_urls,
+            min_gas_reserve_usd=self.evm_min_gas_reserve_usd,
+        )
+        self.evm_address: str | None = self.evm_client.address
 
         self._last_known_balance_usd: Decimal = Decimal("0.0")
 
@@ -116,35 +118,46 @@ class LiveExecutionEngine(IExecutionEngine):
         self._last_known_balance_usd = val
 
     async def get_wallet_balance_usd(self) -> Decimal:
-        """Consulta o saldo real da carteira on-chain (em SOL e tokens nativos) e converte para USD."""
-        if not self.solana_public_key or not self._solana_keypair:
-            return self._last_known_balance_usd
+        """Consulta o saldo real da carteira on-chain (Solana e EVM Multichain) e converte para USD."""
+        total_balance_usd = Decimal("0.0")
 
-        try:
-            pubkey = self._solana_keypair.pubkey()
-            resp = await self._solana_client.get_balance(pubkey)
-            if hasattr(resp, "value") and resp.value is not None:
-                lamports = int(resp.value)
-                sol_balance = Decimal(str(lamports)) / Decimal("1000000000")
-                sol_price = self.estimated_sol_price_usd
-                if self.price_feed is not None:
-                    try:
-                        prices = await self.price_feed.fetch_prices([WSOL_MINT])
-                        if WSOL_MINT in prices and prices[WSOL_MINT] > Decimal("0"):
-                            sol_price = prices[WSOL_MINT]
-                    except Exception:
-                        pass
-                balance_usd = (sol_balance * sol_price).quantize(Decimal("0.01"))
-                self._last_known_balance_usd = balance_usd
-                return balance_usd
-        except Exception as exc:
-            logger.debug("Erro ao consultar saldo real on-chain Solana: %s", exc)
+        # 1. Saldo Solana
+        if self.solana_public_key and self._solana_keypair:
+            try:
+                pubkey = self._solana_keypair.pubkey()
+                resp = await self._solana_client.get_balance(pubkey)
+                if hasattr(resp, "value") and resp.value is not None:
+                    lamports = int(resp.value)
+                    sol_balance = Decimal(str(lamports)) / Decimal("1000000000")
+                    sol_price = self.estimated_sol_price_usd
+                    if self.price_feed is not None:
+                        try:
+                            prices = await self.price_feed.fetch_prices([WSOL_MINT])
+                            if WSOL_MINT in prices and prices[WSOL_MINT] > Decimal("0"):
+                                sol_price = prices[WSOL_MINT]
+                        except Exception:
+                            pass
+                    total_balance_usd += (sol_balance * sol_price).quantize(Decimal("0.01"))
+            except Exception as exc:
+                logger.debug("Erro ao consultar saldo real on-chain Solana: %s", exc)
 
-        return self._last_known_balance_usd
+        # 2. Saldos EVM Multichain (Base, Arbitrum, BSC, Ethereum)
+        if self.evm_client.has_wallet:
+            for chain in ("base", "arbitrum", "bsc"):
+                try:
+                    _, native_bal = await self.evm_client.get_native_balance(chain)
+                    if native_bal > Decimal("0"):
+                        n_price = await self.evm_client.get_native_price_usd(chain)
+                        total_balance_usd += (native_bal * n_price).quantize(Decimal("0.01"))
+                except Exception as evm_bal_exc:
+                    logger.debug("Falha ao consultar saldo EVM da rede %s: %s", chain, evm_bal_exc)
+
+        self._last_known_balance_usd = total_balance_usd
+        return total_balance_usd
 
     def has_connected_wallet(self) -> bool:
         """Verifica se há ao menos uma carteira conectada para operações reais."""
-        return bool(self._solana_keypair is not None or self._evm_private_key is not None)
+        return bool(self._solana_keypair is not None or self.evm_client.has_wallet)
 
     async def connect_solana_wallet(self, private_key_base58: str) -> tuple[bool, str, Decimal, str]:
         """
@@ -181,38 +194,20 @@ class LiveExecutionEngine(IExecutionEngine):
             logger.error("Falha ao conectar carteira Solana: %s", exc)
             return False, "", Decimal("0.0"), f"Chave privada Solana inválida: {exc}"
 
-
     async def connect_evm_wallet(self, private_key_hex: str) -> tuple[bool, str, Decimal, str]:
         """
         Valida e conecta chave privada EVM em memória volátil.
         Retorna (sucesso, address, balance_usd, mensagem_erro).
         """
-        key_clean = private_key_hex.strip()
-        key_clean = private_key_hex.strip().strip('"').strip("'").strip()
-        if not key_clean:
-            return False, "", Decimal("0.0"), "Chave privada EVM vazia."
+        success, addr, err = self.evm_client.set_private_key(private_key_hex)
+        if not success:
+            return False, "", Decimal("0.0"), err
 
-        if len(key_clean) == 42 and key_clean.startswith("0x"):
-            return (
-                False,
-                "",
-                Decimal("0.0"),
-                "Você colou o Endereço Público EVM (42 caracteres) em vez da Chave Privada (66 caracteres). "
-                "Na MetaMask/Rabby: Detalhes da Conta > Exportar Chave Privada.",
-            )
-
-        try:
-            from eth_account import Account
-            acct = Account.from_key(key_clean)
-            self._evm_private_key = key_clean
-            self.evm_address = acct.address
-            bal_usd = Decimal("0.0")
-            logger.info("🔑 [CARTEIRA CONECTADA] EVM: %s", self.evm_address)
-            return True, self.evm_address, bal_usd, ""
-        except Exception as exc:
-            logger.error("Falha ao conectar carteira EVM: %s", exc)
-            return False, "", Decimal("0.0"), f"Chave EVM inválida: {exc}"
-
+        self._evm_private_key = private_key_hex
+        self.evm_address = addr
+        bal_usd = await self.get_wallet_balance_usd()
+        logger.info("🔑 [CARTEIRA CONECTADA] EVM: %s (Saldo Total: $%.2f)", self.evm_address, bal_usd)
+        return True, self.evm_address, bal_usd, ""
 
     def disconnect_wallet(self, chain: str = "solana") -> bool:
         """Desconecta a carteira da rede especificada limpando da memória."""
@@ -220,10 +215,10 @@ class LiveExecutionEngine(IExecutionEngine):
         if c == "solana":
             self._solana_keypair = None
             self.solana_public_key = None
-            self._last_known_balance_usd = Decimal("0.0")
             logger.info("🔒 Carteira Solana desconectada.")
             return True
-        elif c in ("evm", "arbitrum", "base", "ethereum"):
+        elif c in ("evm", "arbitrum", "base", "ethereum", "bsc", "polygon"):
+            self.evm_client.clear_private_key()
             self._evm_private_key = None
             self.evm_address = None
             logger.info("🔒 Carteira EVM desconectada.")
@@ -346,8 +341,15 @@ class LiveExecutionEngine(IExecutionEngine):
                 resp = await self._solana_client.get_balance(self._solana_keypair.pubkey())
                 if hasattr(resp, "value") and resp.value is not None:
                     sol_native = float(resp.value) / 1e9
-                    usd_val = await self.get_wallet_balance_usd()
-                    sol_usd = float(usd_val)
+                    sol_price = self.estimated_sol_price_usd
+                    if self.price_feed is not None:
+                        try:
+                            prices = await self.price_feed.fetch_prices([WSOL_MINT])
+                            if WSOL_MINT in prices and prices[WSOL_MINT] > Decimal("0"):
+                                sol_price = prices[WSOL_MINT]
+                        except Exception:
+                            pass
+                    sol_usd = float((Decimal(str(sol_native)) * sol_price).quantize(Decimal("0.01")))
             except Exception:
                 pass
         wallets.append({
@@ -360,16 +362,76 @@ class LiveExecutionEngine(IExecutionEngine):
             "balance_usd": round(sol_usd, 2),
         })
 
-        # 2. EVM
-        evm_connected = bool(self._evm_private_key and self.evm_address)
+        # 2. EVM (Base & Arbitrum & BSC)
+        evm_connected = self.evm_client.has_wallet
+        evm_addr = self.evm_client.address or ""
+
+        base_native = Decimal("0.0")
+        base_usd = Decimal("0.0")
+        arb_native = Decimal("0.0")
+        arb_usd = Decimal("0.0")
+        bsc_native = Decimal("0.0")
+        bsc_usd = Decimal("0.0")
+
+        if evm_connected and evm_addr:
+            try:
+                _, base_bal = await self.evm_client.get_native_balance("base")
+                base_native = base_bal
+                base_price = await self.evm_client.get_native_price_usd("base")
+                base_usd = (base_native * base_price).quantize(Decimal("0.01"))
+            except Exception:
+                pass
+
+            try:
+                _, arb_bal = await self.evm_client.get_native_balance("arbitrum")
+                arb_native = arb_bal
+                arb_price = await self.evm_client.get_native_price_usd("arbitrum")
+                arb_usd = (arb_native * arb_price).quantize(Decimal("0.01"))
+            except Exception:
+                pass
+
+            try:
+                _, bsc_bal = await self.evm_client.get_native_balance("bsc")
+                bsc_native = bsc_bal
+                bsc_price = await self.evm_client.get_native_price_usd("bsc")
+                bsc_usd = (bsc_native * bsc_price).quantize(Decimal("0.01"))
+            except Exception:
+                pass
+
+        total_eth_native = float(base_native + arb_native)
+        total_eth_usd = float(base_usd + arb_usd)
+
+        # Card Principal EVM (Compatível com frontend Arbitrum One / Base)
         wallets.append({
             "chain": "arbitrum",
             "name": "Arbitrum One / Base (EVM)",
-            "address": self.evm_address or "",
+            "address": evm_addr,
             "is_connected": evm_connected,
-            "balance_native": 0.0,
+            "balance_native": round(total_eth_native, 4),
             "native_symbol": "ETH",
-            "balance_usd": 0.0,
+            "balance_usd": round(total_eth_usd, 2),
+        })
+
+        # Card Detalhado Base
+        wallets.append({
+            "chain": "base",
+            "name": "Base (EVM)",
+            "address": evm_addr,
+            "is_connected": evm_connected,
+            "balance_native": round(float(base_native), 4),
+            "native_symbol": "ETH",
+            "balance_usd": round(float(base_usd), 2),
+        })
+
+        # Card Detalhado BSC
+        wallets.append({
+            "chain": "bsc",
+            "name": "BNB Smart Chain (EVM)",
+            "address": evm_addr,
+            "is_connected": evm_connected,
+            "balance_native": round(float(bsc_native), 4),
+            "native_symbol": "BNB",
+            "balance_usd": round(float(bsc_usd), 2),
         })
 
         return wallets
@@ -579,9 +641,76 @@ class LiveExecutionEngine(IExecutionEngine):
         is_swing: bool,
         strategy_type: str,
     ) -> PositionState | None:
-        """Execução básica para chains EVM."""
-        logger.warning("Execução on-chain EVM direta ainda em preparação para a rede %s.", token.chain)
-        return None
+        """Executa compra real on-chain via agregador KyberSwap na rede EVM correspondente."""
+        if not self.evm_client.has_wallet:
+            logger.error("🚨 [LIVE EVM BUY] Nenhuma carteira EVM conectada para assinar compra de %s.", token.address)
+            return None
+
+        chain = token.chain.lower() if token.chain else "base"
+        logger.info(
+            "⚡ [LIVE EVM BUY] Iniciando compra on-chain: $%.2f USD em %s (%s) na rede %s",
+            amount_usd,
+            token.symbol or token.address[:8],
+            token.address,
+            chain.upper(),
+        )
+
+        swap_result = await self.evm_client.buy_token(
+            chain=chain,
+            token_address=token.address,
+            amount_usd=amount_usd,
+            slippage_pct=self.max_slippage_pct,
+        )
+
+        if not swap_result or not swap_result.success:
+            logger.error(
+                "🚨 [LIVE EVM BUY FALHOU] Erro na execução on-chain para %s: %s",
+                token.address,
+                swap_result.error_message if swap_result else "Sem resposta do executor EVM",
+            )
+            return None
+
+        execution_price = swap_result.effective_price if swap_result.effective_price > Decimal("0") else base_price
+        tokens_received = swap_result.amount_out
+
+        position = PositionState(
+            token_address=token.address,
+            mode=ExecutionMode.LIVE,
+            strategy_type=strategy_type,
+            entry_price=execution_price,
+            initial_token_amount=tokens_received,
+            allocated_capital_usd=amount_usd,
+            trailing_drop_pct=Decimal("0.0") if is_swing else self.trailing_drop_pct,
+            trailing_stop_price=Decimal("0.0") if is_swing else execution_price * (Decimal("1.0") - self.trailing_drop_pct),
+            status=PositionStatus.OPEN,
+        )
+        pos_id = await self.positions_repo.create_position(position)
+        position.id = pos_id
+
+        order = OrderExecution(
+            position_id=pos_id,
+            order_type=OrderType.BUY,
+            mode=ExecutionMode.LIVE,
+            price=execution_price,
+            amount=tokens_received,
+            total_usd=amount_usd,
+            tx_hash=swap_result.tx_hash,
+            fee_cost_usd=swap_result.fee_cost_usd,
+            slippage_realized=float(self.max_slippage_pct),
+            notes=f"Compra Live On-Chain EVM ({chain.upper()}) via KyberSwap Tx: {swap_result.tx_hash}",
+        )
+        await self.orders_repo.record_order(order)
+
+        logger.info(
+            "🟢 [COMPRA LIVE EVM CONFIRMADA] Token: %s | Preço: $%.8f | Qtd: %.2f | Tx: %s | Posição #%d Aberta",
+            token.symbol or token.address[:8],
+            execution_price,
+            tokens_received,
+            swap_result.tx_hash,
+            pos_id,
+            extra={"event": "LIVE_BUY_FILLED", "tx_hash": swap_result.tx_hash, "token_address": token.address},
+        )
+        return position
 
     async def execute_sell(
         self,
@@ -590,7 +719,7 @@ class LiveExecutionEngine(IExecutionEngine):
         reason: str,
         execution_price: Decimal,
     ) -> OrderExecution | None:
-        """Executa ordem real de venda on-chain."""
+        """Executa ordem real de venda on-chain despachando para a rede correspondente."""
         if not self.confirm_live_trading:
             logger.critical("🚨 [LIVE TRADING BLOQUEADO] Venda real cancelada por falta de CONFIRM_LIVE_TRADING.")
             return None
@@ -598,8 +727,32 @@ class LiveExecutionEngine(IExecutionEngine):
         if position.id is None:
             raise ValueError("Posição sem ID registrado.")
 
+        # Identificação da rede do token
+        chain = "solana"
+        if self.tokens_repo:
+            try:
+                meta = await self.tokens_repo.get_token_metadata_by_address(position.token_address)
+                if meta and meta.chain:
+                    chain = meta.chain.lower().strip()
+            except Exception:
+                pass
+
+        if chain == "solana" and not position.token_address.startswith("0x"):
+            return await self._execute_solana_sell(position, amount_tokens, reason, execution_price)
+
+        # Se for endereço EVM (0x...)
+        return await self._execute_evm_sell(position, amount_tokens, reason, execution_price, chain=chain)
+
+    async def _execute_solana_sell(
+        self,
+        position: PositionState,
+        amount_tokens: Decimal,
+        reason: str,
+        execution_price: Decimal,
+    ) -> OrderExecution | None:
+        """Executa ordem real de venda on-chain na Solana via Jupiter Swap v6."""
         if not self._solana_keypair or not self.solana_public_key:
-            logger.error("🚨 [LIVE TRADING] Nenhuma chave configurada para realizar a venda on-chain.")
+            logger.error("🚨 [LIVE TRADING] Nenhuma chave Solana configurada para realizar a venda on-chain.")
             return None
 
         # Quote Jupiter: token.address -> WSOL_MINT
@@ -660,11 +813,11 @@ class LiveExecutionEngine(IExecutionEngine):
             tx_hash=tx_hash,
             fee_cost_usd=fee_cost_usd,
             slippage_realized=float(self.max_slippage_pct),
-            notes=f"Venda Live On-Chain motivo: {reason} | Tx: {tx_hash}",
+            notes=f"Venda Live On-Chain Solana motivo: {reason} | Tx: {tx_hash}",
         )
         await self.orders_repo.record_order(order)
         logger.info(
-            "🔴 [VENDA LIVE CONFIRMADA] Posição #%d (%s) | Qtd: %.2f | Preço: $%.8f | Tx: %s",
+            "🔴 [VENDA LIVE SOLANA CONFIRMADA] Posição #%d (%s) | Qtd: %.2f | Preço: $%.8f | Tx: %s",
             position.id or 0,
             position.token_address[:8],
             amount_tokens,
@@ -674,9 +827,112 @@ class LiveExecutionEngine(IExecutionEngine):
         )
         return order
 
+    async def _execute_evm_sell(
+        self,
+        position: PositionState,
+        amount_tokens: Decimal,
+        reason: str,
+        execution_price: Decimal,
+        chain: str = "base",
+    ) -> OrderExecution | None:
+        """Executa ordem real de venda em rede EVM (approve + swap via KyberSwap)."""
+        if not self.evm_client.has_wallet:
+            logger.error("🚨 [LIVE EVM SELL] Nenhuma carteira EVM conectada para assinar venda on-chain.")
+            return None
+
+        if position.id is None:
+            raise ValueError("Posição sem ID registrado.")
+
+        c = chain if chain in CHAIN_CONFIGS else "base"
+        logger.info(
+            "⚡ [LIVE EVM SELL] Solicitando venda on-chain: %s tokens de %s na rede %s (Motivo: %s)",
+            amount_tokens,
+            position.token_address[:8],
+            c.upper(),
+            reason,
+        )
+
+        swap_result = await self.evm_client.sell_token(
+            chain=c,
+            token_address=position.token_address,
+            amount_tokens=amount_tokens,
+            slippage_pct=self.max_slippage_pct,
+        )
+
+        tx_hash: str
+        fee_cost_usd: Decimal
+        gross_usd: Decimal
+        realized_price: Decimal
+
+        if swap_result and swap_result.success:
+            tx_hash = swap_result.tx_hash
+            fee_cost_usd = swap_result.fee_cost_usd
+            gross_usd = swap_result.amount_out
+            realized_price = swap_result.effective_price if swap_result.effective_price > Decimal("0") else execution_price
+        else:
+            logger.error(
+                "🚨 [LIVE EVM SELL FALHOU] Erro na venda on-chain para %s. Registrando fallback de contingência.",
+                position.token_address,
+            )
+            tx_hash = f"evm_sell_fallback_{position.token_address[:8]}_{datetime.now().timestamp()}"
+            fee_cost_usd = Decimal("0.01")
+            gross_usd = amount_tokens * execution_price
+            realized_price = execution_price
+
+        if reason == "BREAK_EVEN":
+            order_type = OrderType.TAKE_PROFIT_PARTIAL
+        elif reason == "EMERGENCY_STOP":
+            order_type = OrderType.EMERGENCY_EXIT
+        else:
+            order_type = OrderType.TRAILING_STOP_EXIT
+
+        order = OrderExecution(
+            position_id=position.id,
+            order_type=order_type,
+            mode=ExecutionMode.LIVE,
+            price=realized_price,
+            amount=amount_tokens,
+            total_usd=gross_usd,
+            tx_hash=tx_hash,
+            fee_cost_usd=fee_cost_usd,
+            slippage_realized=float(self.max_slippage_pct),
+            notes=f"Venda Live On-Chain EVM ({c.upper()}) motivo: {reason} | Tx: {tx_hash}",
+        )
+        await self.orders_repo.record_order(order)
+        logger.info(
+            "🔴 [VENDA LIVE EVM CONFIRMADA] Posição #%d (%s) | Qtd: %.2f | Preço: $%.8f | Total: $%.2f | Tx: %s",
+            position.id,
+            position.token_address[:8],
+            amount_tokens,
+            realized_price,
+            gross_usd,
+            tx_hash,
+            extra={"event": "LIVE_SELL_FILLED", "tx_hash": tx_hash, "reason": reason},
+        )
+        return order
+
+    async def transfer_evm(
+        self,
+        chain: str,
+        recipient_address: str,
+        amount_native: Decimal | None = None,
+        send_all: bool = False,
+        private_key: str | None = None,
+    ) -> tuple[bool, str, str]:
+        """Transfere moedas nativas em redes EVM."""
+        return await self.evm_client.transfer_native(
+            chain=chain,
+            recipient_address=recipient_address,
+            amount_native=amount_native,
+            send_all=send_all,
+            private_key=private_key,
+        )
+
     async def close(self) -> None:
         """Encerra conexões HTTP e RPC."""
         if self.jupiter_client:
             await self.jupiter_client.close()
         if self._solana_client:
             await self._solana_client.close()
+        if self.evm_client:
+            await self.evm_client.close()

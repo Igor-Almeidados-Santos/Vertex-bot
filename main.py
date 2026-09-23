@@ -115,11 +115,23 @@ class VertexBotOrchestrator:
             trailing_drop_pct=self.settings.TRAILING_STOP_DROP_PCT / Decimal("100.0"),
             price_feed=self.price_feed,
         )
+        evm_rpcs = {
+            "base": self.settings.BASE_RPC_URL,
+            "arbitrum": self.settings.ARBITRUM_RPC_URL,
+            "bsc": self.settings.BSC_RPC_URL,
+            "polygon": self.settings.POLYGON_RPC_URL,
+            "ethereum": self.settings.ETHEREUM_RPC_URL,
+            "avalanche": self.settings.AVALANCHE_RPC_URL,
+            "optimism": self.settings.OPTIMISM_RPC_URL,
+            "blast": self.settings.BLAST_RPC_URL,
+        }
         self.live_engine: LiveExecutionEngine = LiveExecutionEngine(
             positions_repo=self.positions_repo,
             orders_repo=self.orders_repo,
+            tokens_repo=self.tokens_repo,
             solana_rpc_url=self.settings.PRIMARY_RPC_HTTP_URL,
             solana_private_key_base58=self.settings.SOLANA_PRIVATE_KEY_BASE58 or self.settings.WALLET_PRIVATE_KEY_BASE58,
+            evm_rpc_urls=evm_rpcs,
             evm_private_key=self.settings.EVM_PRIVATE_KEY or self.settings.EVM_WALLET_PRIVATE_KEY,
             confirm_live_trading=self.settings.CONFIRM_LIVE_TRADING,
             price_feed=self.price_feed,
@@ -127,6 +139,7 @@ class VertexBotOrchestrator:
             jito_tip_lamports=self.settings.LIVE_JITO_TIP_LAMPORTS,
             trailing_drop_pct=self.settings.TRAILING_STOP_DROP_PCT / Decimal("100.0"),
             estimated_sol_price_usd=self.settings.ESTIMATED_SOL_PRICE_USD,
+            evm_min_gas_reserve_usd=self.settings.EVM_MIN_GAS_RESERVE_USD,
         )
 
         # Gestão de Risco
